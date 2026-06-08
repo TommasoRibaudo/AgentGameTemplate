@@ -1,0 +1,111 @@
+import { useRunStore } from '../useRunStore';
+import { makeManifest, makeRunState } from '../../engine/__tests__/fixtures';
+
+// Reset the Zustand store before each test so tests are isolated
+beforeEach(() => {
+  useRunStore.setState({ state: null, manifest: null });
+});
+
+const manifest = makeManifest();
+
+describe('useRunStore — startNewRun', () => {
+  it('creates a fresh run state from the manifest', () => {
+    useRunStore.getState().startNewRun(manifest);
+    const state = useRunStore.getState().state;
+    expect(state).not.toBeNull();
+    expect(state!.turn_number).toBe(1);
+    expect(state!.phase).toBe('turn_open');
+    expect(state!.money).toBe(manifest.economy.starting_money);
+  });
+
+  it('stores the manifest alongside the run state', () => {
+    useRunStore.getState().startNewRun(manifest);
+    expect(useRunStore.getState().manifest).toBe(manifest);
+  });
+});
+
+describe('useRunStore — loadExistingRun', () => {
+  it('loads a pre-existing run state', () => {
+    const existingState = makeRunState({ turn_number: 15, money: 5_000 });
+    useRunStore.getState().loadExistingRun(existingState, manifest);
+    const s = useRunStore.getState().state!;
+    expect(s.turn_number).toBe(15);
+    expect(s.money).toBe(5_000);
+  });
+});
+
+describe('useRunStore — clearRun', () => {
+  it('nulls state and manifest', () => {
+    useRunStore.getState().startNewRun(manifest);
+    useRunStore.getState().clearRun();
+    expect(useRunStore.getState().state).toBeNull();
+    expect(useRunStore.getState().manifest).toBeNull();
+  });
+});
+
+describe('useRunStore — startTurn / endTurn', () => {
+  it('startTurn advances phase from turn_open to decision', () => {
+    useRunStore.getState().startNewRun(manifest);
+    expect(useRunStore.getState().state!.phase).toBe('turn_open');
+    useRunStore.getState().startTurn();
+    expect(useRunStore.getState().state!.phase).toBe('decision');
+  });
+
+  it('endTurn after startTurn advances turn_number and resets to turn_open', () => {
+    useRunStore.getState().loadExistingRun(makeRunState({ phase: 'turn_open', money: 50_000 }), manifest);
+    useRunStore.getState().startTurn();
+    useRunStore.getState().endTurn();
+    expect(useRunStore.getState().state!.turn_number).toBe(2);
+    expect(useRunStore.getState().state!.phase).toBe('turn_open');
+  });
+
+  it('no-ops gracefully when called with no active run', () => {
+    expect(() => useRunStore.getState().startTurn()).not.toThrow();
+    expect(useRunStore.getState().state).toBeNull();
+  });
+});
+
+describe('useRunStore — resolveDecision', () => {
+  it('marks a decision item as resolved', () => {
+    const item = {
+      id: 'itm_test', type: 'contract_offer' as const, template_key: 'x',
+      client_id: null, contract_id: null, contract_draft: null,
+      description: '', expires_in: null, is_resolved: false, chosen_option_key: null,
+      options: [{ key: 'approve', label: 'Approve', outcome: { money_delta: 0, reputation_delta: 0, stat_deltas: {}, morale_delta: 0, activates_contract_id: null }, push_risk: null }],
+      default_on_ignore: { money_delta: 0, reputation_delta: 0, stat_deltas: {}, morale_delta: 0, activates_contract_id: null },
+    };
+    const state = makeRunState({ phase: 'decision', decision_board: [item] });
+    useRunStore.getState().loadExistingRun(state, manifest);
+    useRunStore.getState().resolveDecision('itm_test', 'approve');
+    expect(useRunStore.getState().state!.decision_board[0].is_resolved).toBe(true);
+  });
+});
+
+describe('useRunStore — upgradeAgentStat', () => {
+  it('increments the stat when player can afford it', () => {
+    useRunStore.getState().loadExistingRun(makeRunState({ money: 50_000, reputation: 50 }), manifest);
+    useRunStore.getState().upgradeAgentStat('operations');
+    expect(useRunStore.getState().state!.agent.stats.operations).toBe(1);
+  });
+
+  it('leaves stat unchanged when player cannot afford it', () => {
+    useRunStore.getState().loadExistingRun(makeRunState({ money: 0, reputation: 0 }), manifest);
+    useRunStore.getState().upgradeAgentStat('operations');
+    expect(useRunStore.getState().state!.agent.stats.operations).toBe(0);
+  });
+});
+
+describe('useRunStore — retireVoluntarily', () => {
+  it('ends the run when in decision phase', () => {
+    useRunStore.getState().loadExistingRun(makeRunState({ phase: 'decision' }), manifest);
+    useRunStore.getState().retireVoluntarily();
+    expect(useRunStore.getState().state!.is_active).toBe(false);
+    expect(useRunStore.getState().state!.end_condition).toBe('retired');
+  });
+
+  it('does nothing outside decision phase', () => {
+    useRunStore.getState().loadExistingRun(makeRunState({ phase: 'turn_open' }), manifest);
+    useRunStore.getState().retireVoluntarily();
+    expect(useRunStore.getState().state!.is_active).toBe(true);
+  });
+});

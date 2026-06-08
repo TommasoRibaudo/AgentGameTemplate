@@ -1,17 +1,198 @@
+import React from 'react';
+import { View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView } from 'react-native';
 import { GameEvent } from '../types/event';
-
-// Full-screen modal that interrupts the Decision Board (PRD §3.4, §4.2).
-// Shares the same resolution engine as DecisionCard — options + mandatory default.
-// Dismissing the modal (back gesture, End Turn) applies default_outcome.
-// Severity drives visual weight: 'crisis' gets a distinct header treatment.
+import { Colors, FontSize, Spacing, Radius, SeverityColors } from '../theme';
+import { formatMoney, formatDelta } from '../theme';
 
 export interface EventModalProps {
   event: GameEvent;
-
-  // resolved display data
-  clientName?: string;   // if event.client_id is set
-  clientLabel?: string;  // variant label
-
-  // null optionKey = apply default_outcome (dismiss / end-turn path)
+  clientName?: string;
+  clientLabel?: string;
   onResolve: (eventId: string, optionKey: string | null) => void;
 }
+
+const SEVERITY_LABELS: Record<string, string> = {
+  minor: 'EVENT',
+  major: 'MAJOR EVENT',
+  crisis: 'CRISIS',
+};
+
+export function EventModal({ event, clientName, clientLabel = 'Client', onResolve }: EventModalProps) {
+  const severityColor = SeverityColors[event.severity] ?? Colors.warning;
+
+  return (
+    <Modal
+      visible
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={() => onResolve(event.id, null)}
+    >
+      <View style={styles.backdrop}>
+        <View style={[styles.sheet, event.severity === 'crisis' && styles.sheetCrisis]}>
+          <View style={[styles.severityBar, { backgroundColor: severityColor }]} />
+          <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+            <View style={styles.header}>
+              <Text style={[styles.severityLabel, { color: severityColor }]}>
+                {SEVERITY_LABELS[event.severity] ?? 'EVENT'}
+              </Text>
+              {clientName && (
+                <Text style={styles.clientName}>{clientLabel}: {clientName}</Text>
+              )}
+            </View>
+
+            <Text style={styles.description}>{event.description}</Text>
+
+            <View style={styles.defaultSection}>
+              <Text style={styles.sectionLabel}>If unresolved</Text>
+              <OutcomePreview outcome={event.default_outcome} />
+            </View>
+
+            <View style={styles.options}>
+              {event.options.map(opt => (
+                <TouchableOpacity
+                  key={opt.key}
+                  style={styles.optionBtn}
+                  onPress={() => onResolve(event.id, opt.key)}
+                  accessibilityLabel={opt.label}
+                >
+                  <Text style={styles.optionLabel}>{opt.label}</Text>
+                  <OutcomePreview outcome={opt.outcome} compact />
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity
+                style={styles.dismissBtn}
+                onPress={() => onResolve(event.id, null)}
+              >
+                <Text style={styles.dismissText}>Apply default and dismiss</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function OutcomePreview({
+  outcome,
+  compact,
+}: {
+  outcome: { money_delta: number; reputation_delta: number };
+  compact?: boolean;
+}) {
+  const hasMoney = outcome.money_delta !== 0;
+  const hasRep   = outcome.reputation_delta !== 0;
+  if (!hasMoney && !hasRep) return null;
+
+  return (
+    <View style={compact ? styles.outcomeLine : styles.outcomeBlock}>
+      {hasMoney && (
+        <Text style={[styles.delta, outcome.money_delta < 0 ? styles.neg : styles.pos]}>
+          {formatMoney(outcome.money_delta)}
+        </Text>
+      )}
+      {hasRep && (
+        <Text style={[styles.delta, outcome.reputation_delta < 0 ? styles.neg : styles.pos]}>
+          {formatDelta(outcome.reputation_delta)} rep
+        </Text>
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: Radius.lg,
+    borderTopRightRadius: Radius.lg,
+    maxHeight: '80%',
+    overflow: 'hidden',
+  },
+  sheetCrisis: {
+    backgroundColor: '#1A0808',
+  },
+  severityBar: {
+    height: 4,
+  },
+  scroll: {
+    flexGrow: 0,
+  },
+  content: {
+    padding: Spacing.lg,
+    gap: Spacing.md,
+  },
+  header: {
+    gap: Spacing.xs,
+  },
+  severityLabel: {
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    letterSpacing: 1,
+  },
+  clientName: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+  },
+  description: {
+    color: Colors.textPrimary,
+    fontSize: FontSize.lg,
+    lineHeight: 26,
+  },
+  sectionLabel: {
+    color: Colors.textDim,
+    fontSize: FontSize.xs,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: Spacing.xs,
+  },
+  defaultSection: {
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    gap: Spacing.xs,
+  },
+  options: {
+    gap: Spacing.sm,
+  },
+  optionBtn: {
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.accent,
+    padding: Spacing.md,
+    gap: Spacing.xs,
+  },
+  optionLabel: {
+    color: Colors.textPrimary,
+    fontSize: FontSize.md,
+    fontWeight: '600',
+  },
+  dismissBtn: {
+    paddingVertical: Spacing.md,
+    alignItems: 'center',
+  },
+  dismissText: {
+    color: Colors.textDim,
+    fontSize: FontSize.sm,
+  },
+  outcomeLine: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  outcomeBlock: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  delta: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+  },
+  pos: { color: Colors.positive },
+  neg: { color: Colors.negative },
+});

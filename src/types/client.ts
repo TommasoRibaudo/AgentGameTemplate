@@ -34,6 +34,8 @@ export interface Client {
   traits: AppliedTrait[];
   // turns spent on your roster — longer tenure narrows fog independently of scouting spend
   turns_on_roster: number;
+  // turns spent at the current arc stage — drives arc progression evaluation
+  turns_at_stage: number;
   active_campaign_id: string | null;
   // the agent<->client contract currently in force; null if unsigned or released
   agent_contract_id: string | null;

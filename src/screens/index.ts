@@ -5,3 +5,7 @@ export * from './ScoutScreen';
 export * from './AgencyScreen';
 export * from './CareerSummaryScreen';
 export * from './LeaderboardScreen';
+export * from './AchievementsScreen';
+export * from './LegacyScreen';
+export * from './NewCareerScreen';
+export * from './ProspectDetailScreen';

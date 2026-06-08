@@ -1,76 +1,248 @@
-import { RunState } from '../types/run';
-import { NewsItem } from '../types/run';
-import { VariantManifest } from '../types/manifest';
+import { RunState, NewsItem, NewsItemType } from '../types/run';
 import { TurnPhase } from '../types/primitives';
+import { VariantManifest } from '../types/manifest';
+import { computeMonthlyIncome, computeMonthlyExpenses, applyMoneyDelta, applyReputationDelta, settleObjectivePayouts, evaluateObjectiveConditions } from './resource';
+import { refreshClientFog, evaluateArcProgression, generateProspects } from './client';
+import { advanceCampaigns } from './campaign';
+import { generateEvents, applyEventDefaults } from './event';
+import { generateDecisionBoard, applyBoardDefaults, tickBoardItemExpiry } from './decision-queue';
+import { serviceDebt, checkFailureCondition, openDebtState, fireLowMoneyWarning } from './failure';
 
 // INVARIANTS (PRD §2.1):
-// - Phase order is fixed: turn_open → upkeep → decision → resolution → turn_close.
-//   No system may skip or reorder phases.
-// - Early turn-end is allowed, but every unresolved queue item still resolves via its default.
-//   The world always moves — the player cannot freeze time by not acting.
-// - Failure is checked ONLY at turn_close. A low-Money early warning fires immediately
-//   during upkeep or decision when Money first goes low/negative — never silent.
-// - The career clock advances unconditionally at turn_close.
+// - Phase order is fixed and must not be skipped.
+// - Every unresolved board item fires its default at Resolution phase.
+// - Failure is checked ONLY at Turn Close.
+// - Career clock advances unconditionally at Turn Close.
 
 export interface PhaseResult {
   state: RunState;
   news: NewsItem[];
 }
 
-// Each phase runner is a pure function: (current state, manifest) → (new state, news items).
-// Phases do not communicate side-effects — all state changes flow through the returned state.
 export type PhaseRunner = (state: RunState, manifest: VariantManifest) => PhaseResult;
 
+const makeNews = (
+  state: RunState,
+  type: NewsItemType,
+  description: string,
+  moneyDelta?: number | null,
+  repDelta?: number | null,
+  clientId?: string | null,
+): NewsItem => ({
+  id:               `news_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`,
+  turn_number:      state.turn_number,
+  type,
+  description,
+  money_delta:      moneyDelta ?? null,
+  reputation_delta: repDelta ?? null,
+  client_id:        clientId ?? null,
+});
+
+// ─── Phase guard ──────────────────────────────────────────────────────────────
+
+export type AssertPhase = (state: RunState, expected: TurnPhase) => void;
+
+export const assertPhase: AssertPhase = (state, expected) => {
+  if (state.phase !== expected) {
+    throw new Error(`Phase error: expected "${expected}", got "${state.phase}"`);
+  }
+};
+
 // ─── Phase 1: Turn Open ───────────────────────────────────────────────────────
-// Prepares the news feed summary for the player to review.
-// No state mutations — read-only aggregation of last turn's results.
-// Returns the same state with news items describing what happened.
-export type RunTurnOpen = PhaseRunner;
 
-// ─── Phase 2: Upkeep (automatic) ─────────────────────────────────────────────
-// Engine resolves all passive effects in this order:
-//   1. Deduct overhead + defense track recurring costs
-//   2. Credit per_month contract income (net of your_cut)
-//   3. Tick contract duration_remaining (expire contracts at 0)
-//   4. Service debt repayment (if debt.is_active)
-//   5. Evaluate arc stage progression for all clients
-//   6. Advance all active campaign installments (see campaign system)
-//   7. Fire low-Money early warning if Money ≤ LOW_MONEY_THRESHOLD after step 4
-// Player sees deltas in the news feed but does not act.
-export type RunUpkeep = PhaseRunner;
+export const runTurnOpen: PhaseRunner = (state, _manifest) => {
+  assertPhase(state, 'turn_open');
+  return { state: { ...state, phase: 'upkeep' }, news: [] };
+};
 
-export const LOW_MONEY_THRESHOLD = 0;  // warning fires at or below this value
+// ─── Phase 2: Upkeep ─────────────────────────────────────────────────────────
 
-// ─── Phase 3: Decision (player acts) ─────────────────────────────────────────
-// Generates the decision board (2–5 items) at phase entry.
-// Player resolves items in any order via approve/reject/push.
-// Random events interrupt as modals and are resolved before board interaction resumes.
-// Phase ends when the player presses End Turn.
-// This runner sets up the board; actual item resolution is handled by the decision-queue system.
-export type RunDecisionPhase = PhaseRunner;
+export const runUpkeep: PhaseRunner = (state, manifest) => {
+  assertPhase(state, 'upkeep');
+  const news: NewsItem[] = [];
+  let s = state;
 
-// ─── Phase 4: Resolution (automatic) ─────────────────────────────────────────
-// Applies all consequences of Phase 3 choices in the order items were resolved.
-// Also applies defaults for any items the player left unresolved.
-// Produces a digest of what happened for the news feed.
-export type RunResolution = PhaseRunner;
+  // 1. Deduct expenses
+  const expenses = computeMonthlyExpenses(s, manifest);
+  s = applyMoneyDelta(s, -expenses);
+  news.push(makeNews(s, 'upkeep_summary', `Expenses: -$${expenses.toLocaleString()}`, -expenses));
+
+  // 2. Credit per_month income
+  const income = computeMonthlyIncome(s);
+  if (income > 0) {
+    s = applyMoneyDelta(s, income);
+    news.push(makeNews(s, 'income_received', `Monthly income: +$${income.toLocaleString()}`, income));
+  }
+
+  // 3. Tick contract timers and expire
+  const updatedContracts = s.contracts.map(c => ({
+    ...c,
+    duration_remaining: Math.max(0, c.duration_remaining - 1),
+    turns_active:       c.turns_active + 1,
+  }));
+  const expiredContracts = updatedContracts.filter(c => c.duration_remaining === 0);
+  for (const ec of expiredContracts) {
+    news.push(makeNews(s, 'contract_expired', `Contract expired for client`, null, null, ec.client_id));
+  }
+  s = { ...s, contracts: updatedContracts };
+
+  // 4. Service debt repayment
+  if (s.debt.is_active) {
+    s = serviceDebt(s, manifest);
+  }
+
+  // 5. Open debt state if money dropped to 0 or below
+  if (s.money <= 0 && !s.debt.is_active) {
+    s = openDebtState(s, manifest);
+  }
+
+  // 6. Fire low-money warning immediately if triggered
+  s = fireLowMoneyWarning(s);
+
+  // 7. Advance campaigns (one installment per campaign)
+  s = advanceCampaigns(s, manifest);
+
+  // 8. Evaluate arc stage progression for all clients
+  const updatedRoster = s.roster.map(client => {
+    const newStage = evaluateArcProgression(client, manifest);
+    const stageChanged = newStage !== client.arc_stage;
+    if (stageChanged) {
+      news.push(makeNews(s, 'client_milestone',
+        `${client.name} has reached ${newStage}`, null, null, client.id));
+    }
+    const newStats = refreshClientFog(client, s.agent);
+    return {
+      ...client,
+      stats:         newStats,
+      arc_stage:     newStage,
+      turns_on_roster: client.turns_on_roster + 1,
+      turns_at_stage:  stageChanged ? 0 : client.turns_at_stage + 1,
+      clients_developed: undefined, // tracked on RunState, not client
+    };
+  });
+
+  // Track clients_developed (those who reached Peak this turn)
+  const newlyPeak = updatedRoster.filter(
+    (c, i) => c.arc_stage === 'peak' && s.roster[i]?.arc_stage !== 'peak',
+  ).length;
+
+  s = {
+    ...s,
+    roster:            updatedRoster,
+    clients_developed: s.clients_developed + newlyPeak,
+    phase:             'decision',
+  };
+
+  return { state: { ...s, news_feed: [...s.news_feed, ...news] }, news };
+};
+
+// ─── Phase 3: Decision setup ──────────────────────────────────────────────────
+
+const MAX_PROSPECTS = 6;
+
+export const runDecisionPhase: PhaseRunner = (state, manifest) => {
+  assertPhase(state, 'decision');
+
+  // Tick expiry on carried-over items first
+  let s = tickBoardItemExpiry(state);
+
+  // Refresh prospect pool (add up to 2 new prospects per turn, cap at MAX_PROSPECTS)
+  if (s.prospects.length < MAX_PROSPECTS) {
+    const usedNames = new Set([
+      ...s.roster.map(c => c.name),
+      ...s.prospects.map(p => p.name),
+    ]);
+    const fresh = generateProspects(Math.min(2, MAX_PROSPECTS - s.prospects.length), usedNames);
+    s = { ...s, prospects: [...s.prospects, ...fresh] };
+  }
+
+  // Generate this turn's board
+  const board = generateDecisionBoard(s, manifest);
+
+  // Generate events that will interrupt the board
+  const newEvents = generateEvents(s, manifest);
+
+  return {
+    state: {
+      ...s,
+      decision_board: board,
+      pending_events:  [...s.pending_events, ...newEvents],
+    },
+    news: [],
+  };
+};
+
+// ─── Phase 4: Resolution ──────────────────────────────────────────────────────
+
+export const runResolution: PhaseRunner = (state, manifest) => {
+  assertPhase(state, 'decision'); // resolution follows decision; phase guard uses 'decision'
+
+  let s = state;
+
+  // Apply defaults for any unresolved board items
+  s = applyBoardDefaults(s, manifest);
+
+  // Apply defaults for any unresolved events
+  s = applyEventDefaults(s, manifest);
+
+  // Evaluate objective conditions, then settle any newly-met payouts
+  s = evaluateObjectiveConditions(s);
+  const { state: settled } = settleObjectivePayouts(s, manifest);
+  s = settled;
+
+  return { state: { ...s, phase: 'turn_close' }, news: [] };
+};
 
 // ─── Phase 5: Turn Close ──────────────────────────────────────────────────────
-// 1. Check failure condition (see failure system — bankruptcy only checked here)
-// 2. Advance turn_number
-// 3. Check career clock expiry (turn_number >= career_length → end_condition = 'clock_expired')
-// Returns updated state. If failure or expiry, sets is_active = false.
-export type RunTurnClose = PhaseRunner;
 
-// ─── Turn orchestrator ────────────────────────────────────────────────────────
-// Drives the full turn sequence for the automatic phases (1, 2, 4, 5).
-// Phase 3 (decision) is driven by the UI — the loop pauses and waits for player input.
+export const runTurnClose: PhaseRunner = (state, manifest) => {
+  assertPhase(state, 'turn_close');
+
+  let s = state;
+
+  // Check failure condition
+  s = checkFailureCondition(s, manifest);
+  if (!s.is_active) return { state: s, news: [] };
+
+  // Advance turn counter
+  const newTurn = s.turn_number + 1;
+
+  // Check career clock expiry
+  if (newTurn > s.career_length) {
+    return {
+      state: { ...s, turn_number: newTurn, is_active: false, end_condition: 'clock_expired', phase: 'turn_open' },
+      news:  [],
+    };
+  }
+
+  return {
+    state: {
+      ...s,
+      turn_number:        newTurn,
+      phase:              'turn_open',
+      low_money_warning:  s.money <= 0,   // reset each turn; re-fires in upkeep if still low
+    },
+    news: [],
+  };
+};
+
+// ─── Orchestrator ─────────────────────────────────────────────────────────────
+
 export interface TurnOrchestrator {
-  startTurn: (state: RunState, manifest: VariantManifest) => PhaseResult;      // runs phases 1–2
-  endTurn: (state: RunState, manifest: VariantManifest) => PhaseResult;        // runs phases 4–5
+  startTurn: (state: RunState, manifest: VariantManifest) => PhaseResult;
+  endTurn:   (state: RunState, manifest: VariantManifest) => PhaseResult;
 }
 
-// ─── Phase guard ─────────────────────────────────────────────────────────────
-// Asserts state.phase matches the expected phase before a runner executes.
-// Throws if the phase is wrong — enforces the fixed order invariant.
-export type AssertPhase = (state: RunState, expected: TurnPhase) => void;
+export const turnOrchestrator: TurnOrchestrator = {
+  startTurn: (state, manifest) => {
+    const { state: s1, news: n1 } = runTurnOpen(state, manifest);
+    const { state: s2, news: n2 } = runUpkeep(s1, manifest);
+    const { state: s3, news: n3 } = runDecisionPhase(s2, manifest);
+    return { state: s3, news: [...n1, ...n2, ...n3] };
+  },
+  endTurn: (state, manifest) => {
+    const { state: s1, news: n1 } = runResolution(state, manifest);
+    const { state: s2, news: n2 } = runTurnClose(s1, manifest);
+    return { state: s2, news: [...n1, ...n2] };
+  },
+};

@@ -2,7 +2,7 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
-    "ignoreDeprecations": "6.0",
+    "ignoreDeprecations": "5.0",
     "baseUrl": ".",
     "paths": {
       "@types/*":      ["src/types/*"],
@@ -13,5 +13,6 @@
       "@manifest/*":   ["src/manifest/*"],
       "@navigation/*": ["src/navigation/*"]
     }
-  }
+  },
+  "exclude": ["node_modules", "**/__tests__/**", "**/*.test.ts", "**/*.test.tsx"]
 }

@@ -1,35 +1,222 @@
-import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { RunState } from '../types/run';
-import { VariantManifest } from '../types/manifest';
-import { TabParamList } from '../navigation/types';
+import React, { useState, useCallback, useEffect } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView,
+  TouchableOpacity, SafeAreaView, Alert,
+} from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootParamList } from '../navigation/types';
+import {
+  useRunStore, useRunState, useManifest,
+  useDecisionBoard, useActiveEvents, useNewsFeed,
+  usePhase, useMoney, useReputation, useTurnNumber,
+  useIsRunActive,
+} from '../store/useRunStore';
+import { TopBar }       from '../components/TopBar';
+import { DecisionCard } from '../components/DecisionCard';
+import { NewsItemRow }  from '../components/NewsItemRow';
+import { EventModal }   from '../components/EventModal';
+import { Colors, FontSize, Spacing, Radius } from '../theme';
 
-// Tab 1 — the core gameplay screen (PRD §4.2).
-//
-// Layout (top to bottom):
-//   TopBar              (always visible, outside this screen's scroll)
-//   ── News Feed ──────  revisitable ScrollView; shown expanded at turn start
-//      NewsItemRow[]    one per news item from the current and prior turn
-//   ── Decision Board ─  FlatList of 2–5 DecisionCard items
-//      DecisionCard[]   player resolves in any order
-//      [End Turn]       ConfirmDialog if unresolved items remain → applies defaults
-//
-// Event modals (EventModal) render as overlays on top of this screen when
-// pending_events.length > 0. The board is non-interactive while a modal is open.
-//
-// The News Feed and Decision Board share the same scroll container. The player
-// can pull up to review the feed at any point during the Decision phase.
+export function HomeScreen() {
+  const rootNav = useNavigation<NativeStackNavigationProp<RootParamList>>();
 
-export type HomeScreenProps = NativeStackScreenProps<TabParamList, 'Home'>;
+  const runState  = useRunState();
+  const manifest  = useManifest();
+  const board     = useDecisionBoard();
+  const events    = useActiveEvents();
+  const feed      = useNewsFeed();
+  const phase     = usePhase();
+  const money     = useMoney();
+  const rep       = useReputation();
+  const turnNum   = useTurnNumber();
+  const isActive  = useIsRunActive();
 
-// Data and callbacks injected via context or a parent container — not passed as nav params.
-export interface HomeScreenContext {
-  runState: RunState;
-  manifest: VariantManifest;
-  onResolveDecision: (itemId: string, optionKey: string) => void;
-  onResolveEvent: (eventId: string, optionKey: string | null) => void;
-  onEndTurn: () => void;
+  const resolveDecision = useRunStore(s => s.resolveDecision);
+  const resolveEvent    = useRunStore(s => s.resolveEvent);
+  const endTurn         = useRunStore(s => s.endTurn);
+  const startTurn       = useRunStore(s => s.startTurn);
+
+  const [feedExpanded, setFeedExpanded] = useState(false);
+
+  // Navigate to CareerSummary whenever the run ends (covers all end paths:
+  // clock expiry, bankruptcy, voluntary retire from AgencyScreen)
+  useEffect(() => {
+    const state = useRunStore.getState().state;
+    if (!isActive && state?.end_condition) {
+      rootNav.navigate('CareerSummary', { runId: state.id });
+    }
+  }, [isActive]);
+
+  const handleStartTurn = useCallback(() => {
+    startTurn();
+  }, [startTurn]);
+
+  const handleEndTurn = useCallback(() => {
+    const unresolved = board.filter(i => !i.is_resolved);
+    if (unresolved.length > 0) {
+      Alert.alert(
+        'End Turn?',
+        'Unresolved items will take their default outcome.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'End Turn', style: 'destructive', onPress: () => endTurn() },
+        ],
+      );
+    } else {
+      endTurn();
+    }
+  }, [board, endTurn]);
+
+  if (!runState || !manifest) {
+    return (
+      <View style={styles.empty}>
+        <Text style={styles.emptyText}>No active run.</Text>
+      </View>
+    );
+  }
+
+  const activeEvent  = events.find(e => !e.is_resolved) ?? null;
+  const isDecision   = phase === 'decision';
+  const isTurnOpen   = phase === 'turn_open';
+  const labels       = manifest.labels;
+  const shownFeed    = feedExpanded ? feed : feed.slice(-5);
+
+  const clientName = (clientId: string | null) =>
+    clientId ? (runState.roster.find(c => c.id === clientId)?.name) : undefined;
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <TopBar
+        money={money}
+        reputation={rep}
+        rosterCount={runState.roster.length}
+        rosterCapacity={runState.agent.roster_capacity}
+        turnNumber={turnNum}
+        careerLength={runState.career_length}
+        isInDebt={runState.debt.is_active}
+        lowMoneyWarning={runState.low_money_warning}
+        moneyLabel={labels.money}
+        reputationLabel={labels.reputation}
+      />
+
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+        {/* News Feed */}
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            onPress={() => setFeedExpanded(e => !e)}
+          >
+            <Text style={styles.sectionTitle}>News Feed</Text>
+            <Text style={styles.sectionToggle}>{feedExpanded ? '▲' : '▼'}</Text>
+          </TouchableOpacity>
+          {shownFeed.length === 0 ? (
+            <Text style={styles.emptySection}>Nothing yet this career.</Text>
+          ) : (
+            shownFeed.map(item => (
+              <NewsItemRow
+                key={item.id}
+                item={item}
+                clientName={clientName(item.client_id)}
+              />
+            ))
+          )}
+        </View>
+
+        {/* Decision Board */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Decision Board</Text>
+
+          {isTurnOpen && (
+            <TouchableOpacity style={styles.startBtn} onPress={handleStartTurn}>
+              <Text style={styles.startBtnText}>Start Turn {turnNum}</Text>
+            </TouchableOpacity>
+          )}
+
+          {isDecision && board.length === 0 && (
+            <Text style={styles.emptySection}>Board is clear.</Text>
+          )}
+
+          {isDecision && board.map(item => (
+            <DecisionCard
+              key={item.id}
+              item={item}
+              clientName={clientName(item.client_id)}
+              clientLabel={labels.client}
+              entityLabel={labels.entity}
+              isPushEnabled={runState.agent.stats.negotiation > 0}
+              onResolve={resolveDecision}
+            />
+          ))}
+        </View>
+
+        {isDecision && (
+          <TouchableOpacity style={styles.endTurnBtn} onPress={handleEndTurn}>
+            <Text style={styles.endTurnText}>End Turn</Text>
+          </TouchableOpacity>
+        )}
+
+        <View style={{ height: Spacing.xxl }} />
+      </ScrollView>
+
+      {activeEvent && (
+        <EventModal
+          event={activeEvent}
+          clientName={clientName(activeEvent.client_id)}
+          clientLabel={labels.client}
+          onResolve={resolveEvent}
+        />
+      )}
+    </SafeAreaView>
+  );
 }
 
-// End Turn confirmation copy — shown when unresolved items remain.
-export const END_TURN_CONFIRM_COPY =
-  'Unresolved items will take their default outcome. End the turn?';
+const styles = StyleSheet.create({
+  safe:   { flex: 1, backgroundColor: Colors.bg },
+  scroll: { flex: 1 },
+  content:{ padding: Spacing.md, gap: Spacing.lg },
+  section:{ gap: Spacing.sm },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  sectionTitle: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  sectionToggle: { color: Colors.textDim, fontSize: FontSize.xs },
+  emptySection: {
+    color: Colors.textDim,
+    fontSize: FontSize.sm,
+    paddingVertical: Spacing.md,
+    textAlign: 'center',
+  },
+  empty: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.bg,
+  },
+  emptyText: { color: Colors.textDim, fontSize: FontSize.md },
+  startBtn: {
+    backgroundColor: Colors.accent,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    alignItems: 'center',
+  },
+  startBtnText: { color: Colors.textPrimary, fontSize: FontSize.md, fontWeight: '700' },
+  endTurnBtn: {
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.md,
+    alignItems: 'center',
+    marginTop: Spacing.sm,
+  },
+  endTurnText: { color: Colors.textSecondary, fontSize: FontSize.md, fontWeight: '600' },
+});

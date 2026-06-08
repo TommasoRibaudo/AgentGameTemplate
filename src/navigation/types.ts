@@ -24,6 +24,8 @@ export type ScoutStackParamList = {
 export type RootParamList = {
   Run: NavigatorScreenParams<TabParamList>;   // the four-tab run experience
   CareerSummary: { runId: string };
-  Leaderboard: undefined;
-  NewCareer: undefined;                        // variant selection + run init
+  Leaderboard:   undefined;
+  Achievements:  undefined;
+  Legacy:        undefined;
+  NewCareer:     undefined;                   // variant selection + run init
 };

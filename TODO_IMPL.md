@@ -7,18 +7,16 @@ Engine first (pure functions, fully unit-testable), then state layer, then UI.
 
 ## Phase 0 — Project Bootstrap
 
-- [ ] Init Expo project with TypeScript template into this directory
-      `npx create-expo-app . --template expo-template-blank-typescript`
-- [ ] Install core dependencies
-      - `@react-navigation/native`, `@react-navigation/bottom-tabs`, `@react-navigation/native-stack`
-      - `react-native-screens`, `react-native-safe-area-context`
-      - `zustand`
-      - `@react-native-async-storage/async-storage`
-- [ ] Install dev dependencies
-      - `jest`, `@testing-library/react-native`, `@testing-library/jest-native`
-- [ ] Move `src/` spec files into the Expo project root
-- [ ] Configure `tsconfig.json` path aliases (`@types`, `@engine`, `@components`, `@screens`, `@store`)
-- [ ] Configure Jest for React Native + TypeScript
+- [x] Init Expo project with TypeScript template (Expo SDK 56, React 19, RN 0.85)
+- [x] Install core dependencies (React Navigation v7, Zustand v5, AsyncStorage v3)
+- [x] Install dev dependencies (jest-expo, @testing-library/react-native, @types/jest)
+- [x] Install babel-plugin-module-resolver for runtime path alias support
+- [x] Configure `tsconfig.json` path aliases (`@types`, `@engine`, `@components`, `@screens`, `@store`, `@manifest`, `@navigation`)
+- [x] Configure `babel.config.js` with matching module-resolver aliases
+- [x] Configure Jest in `package.json` (preset: jest-expo, moduleNameMapper, testMatch)
+- [x] Fix app name in `app.json` and `package.json`
+- [x] TypeScript type-check passes clean across all spec files (`tsc --noEmit`)
+- [x] Git repo initialized, initial commit made; `.claude/` and `*.stackdump` excluded
 
 ---
 

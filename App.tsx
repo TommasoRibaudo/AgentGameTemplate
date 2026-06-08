@@ -1,20 +1,31 @@
+import React from 'react';
+import { View } from 'react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { AppNavigator } from './src/navigation/AppNavigator';
+import { useHydrateStores, useAutoSave } from './src/store/persistence';
+import { Colors } from './src/theme';
+
+function AppRoot() {
+  const { hydrating } = useHydrateStores();
+  useAutoSave();
+
+  if (hydrating) {
+    // Blank dark screen while AsyncStorage loads — avoids flash of wrong route.
+    return <View style={{ flex: 1, backgroundColor: Colors.bg }} />;
+  }
+
+  return <AppNavigator />;
+}
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <SafeAreaProvider>
+      <NavigationContainer>
+        <AppRoot />
+        <StatusBar style="light" />
+      </NavigationContainer>
+    </SafeAreaProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});

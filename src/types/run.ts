@@ -44,13 +44,21 @@ export interface NewsItem {
 // Top-level game state. This is the single source of truth persisted between sessions.
 export interface RunState {
   id: string;
+  variant_id: string;             // links saved run back to its manifest via MANIFEST_REGISTRY
   turn_number: number;
   career_length: number;          // total turns available this career (open question §6.1)
   phase: TurnPhase;
 
   money: number;
   reputation: number;
+  // fires immediately when money first drops to ≤ 0 (not just at Turn Close)
+  low_money_warning: boolean;
   debt: DebtState;
+
+  // career-long tracking used for final score computation
+  peak_reputation: number;
+  total_earnings: number;     // cumulative money earned (not current balance)
+  clients_developed: number;  // clients who reached Peak during this run
 
   agent: AgentState;
 

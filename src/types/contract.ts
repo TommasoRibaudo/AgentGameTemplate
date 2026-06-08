@@ -16,6 +16,8 @@ export interface Objective {
   payout: number;
   condition_key: string;    // variant-defined condition identifier (e.g. 'album_platinum')
   is_met: boolean;
+  // set to true after the payout has been credited — prevents double-payment
+  is_paid: boolean;
 }
 
 // The proposed terms attached to a contract_offer DecisionItem. The player reads this

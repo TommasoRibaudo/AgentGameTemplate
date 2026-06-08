@@ -1,6 +1,7 @@
-// Persistent top bar — always visible across all four tabs (PRD §4.1).
-// The four numbers that define your state at a glance, plus the failure-warning indicator.
-// Must be thumb-reachable and legible at small sizes.
+import React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import { Colors, FontSize, Spacing } from '../theme';
+import { formatMoney } from '../theme';
 
 export interface TopBarProps {
   money: number;
@@ -9,11 +10,103 @@ export interface TopBarProps {
   rosterCapacity: number;
   turnNumber: number;
   careerLength: number;
-  // true when debt.is_active — renders a persistent debt flag
   isInDebt: boolean;
-  // true when Money has crossed LOW_MONEY_THRESHOLD this turn — renders a warning tint
   lowMoneyWarning: boolean;
-  // variant display labels
   moneyLabel: string;
   reputationLabel: string;
 }
+
+export function TopBar({
+  money,
+  reputation,
+  rosterCount,
+  rosterCapacity,
+  turnNumber,
+  careerLength,
+  isInDebt,
+  lowMoneyWarning,
+  moneyLabel,
+  reputationLabel,
+}: TopBarProps) {
+  return (
+    <View style={[styles.bar, lowMoneyWarning && styles.warnBg]}>
+      <Cell label={moneyLabel} value={formatMoney(money)} valueStyle={money < 0 ? styles.negative : undefined} />
+      <Divider />
+      <Cell label={reputationLabel} value={String(reputation)} />
+      <Divider />
+      <Cell label="Roster" value={`${rosterCount}/${rosterCapacity}`} />
+      <Divider />
+      <Cell label="Turn" value={`${turnNumber}/${careerLength}`} />
+      {isInDebt && (
+        <View style={styles.debtBadge}>
+          <Text style={styles.debtText}>DEBT</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function Cell({ label, value, valueStyle }: { label: string; value: string; valueStyle?: object }) {
+  return (
+    <View style={styles.cell}>
+      <Text style={styles.cellLabel}>{label}</Text>
+      <Text style={[styles.cellValue, valueStyle]}>{value}</Text>
+    </View>
+  );
+}
+
+function Divider() {
+  return <View style={styles.divider} />;
+}
+
+const styles = StyleSheet.create({
+  bar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    gap: Spacing.sm,
+  },
+  warnBg: {
+    backgroundColor: '#1A1208',
+  },
+  cell: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
+  },
+  cellLabel: {
+    color: Colors.textDim,
+    fontSize: FontSize.xs,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  cellValue: {
+    color: Colors.textPrimary,
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+  },
+  negative: {
+    color: Colors.negative,
+  },
+  divider: {
+    width: 1,
+    height: 28,
+    backgroundColor: Colors.border,
+  },
+  debtBadge: {
+    backgroundColor: Colors.negative,
+    borderRadius: 3,
+    paddingHorizontal: Spacing.xs,
+    paddingVertical: 2,
+  },
+  debtText: {
+    color: Colors.textPrimary,
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+});

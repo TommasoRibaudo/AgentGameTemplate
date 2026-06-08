@@ -63,12 +63,31 @@ export interface TraitDefinition {
 }
 
 // §5.1.6 — event library entry
+
+// Each option the player can choose; outcome is applied immediately on selection.
+// This is the manifest-side definition; engine maps it to EventOption at runtime.
+export interface EventOptionDefinition {
+  key: string;
+  label: string;
+  outcome: {
+    money_delta: number;
+    reputation_delta: number;
+    stat_deltas: StatDeltas;
+  };
+}
+
 export interface EventDefinition {
   key: string;
   category: EventCategory;
   severity: EventSeverity;
   description_template: string;   // may include {client_name} etc. for substitution
-  option_keys: string[];
+  options: EventOptionDefinition[];
+  // fires when the player dismisses the modal without choosing, or turn ends unresolved
+  default_outcome: {
+    money_delta: number;
+    reputation_delta: number;
+    stat_deltas: StatDeltas;
+  };
   // which defense track key (if any) mitigates this event's frequency and severity
   defense_track_key: string | null;
 }
