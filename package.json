@@ -1,0 +1,58 @@
+{
+  "name": "agent-game-template",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^3.1.1",
+    "@react-navigation/bottom-tabs": "^7.17.0",
+    "@react-navigation/native": "^7.2.6",
+    "@react-navigation/native-stack": "^7.17.0",
+    "expo": "~56.0.9",
+    "expo-status-bar": "~56.0.4",
+    "react": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-safe-area-context": "^5.8.0",
+    "react-native-screens": "^4.25.2",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@testing-library/jest-native": "^5.4.3",
+    "@testing-library/react-native": "^14.0.0",
+    "@types/jest": "^30.0.0",
+    "@types/react": "~19.2.2",
+    "babel-plugin-module-resolver": "^5.0.3",
+    "jest": "^30.4.2",
+    "jest-expo": "^56.0.4",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "test": "jest",
+    "test:watch": "jest --watch"
+  },
+  "jest": {
+    "preset": "jest-expo",
+    "setupFilesAfterFramework": [
+      "@testing-library/jest-native/extend-expect"
+    ],
+    "testPathIgnorePatterns": ["/node_modules/"],
+    "moduleNameMapper": {
+      "^@types/(.*)$": "<rootDir>/src/types/$1",
+      "^@engine/(.*)$": "<rootDir>/src/engine/$1",
+      "^@components/(.*)$": "<rootDir>/src/components/$1",
+      "^@screens/(.*)$": "<rootDir>/src/screens/$1",
+      "^@store/(.*)$": "<rootDir>/src/store/$1",
+      "^@manifest/(.*)$": "<rootDir>/src/manifest/$1",
+      "^@navigation/(.*)$": "<rootDir>/src/navigation/$1"
+    },
+    "testMatch": ["<rootDir>/src/**/*.test.ts", "<rootDir>/src/**/*.test.tsx"],
+    "collectCoverageFrom": [
+      "src/engine/**/*.ts",
+      "src/manifest/**/*.ts"
+    ]
+  },
+  "private": true
+}
