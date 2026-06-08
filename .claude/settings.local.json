@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "PowerShell(New-Item *)",
-      "PowerShell(Get-ChildItem -Recurse \"C:\\\\Users\\\\User\\\\Documents\\\\AgentGameTemplate\\\\src\" | Where-Object { -not $_.PSIsContainer } | Select-Object -ExpandProperty FullName)"
-    ]
-  }
-}
