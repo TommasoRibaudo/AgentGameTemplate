@@ -6,12 +6,21 @@ import {
   executePush,
   hydrateContractOffer,
   generateDecisionBoard,
+  generateContractRenewalOffers,
   BOARD_MIN_ITEMS,
   BOARD_MAX_ITEMS,
+  RENEWAL_NOTICE_TURNS,
+  RENEWAL_MORALE_THRESHOLD,
+  computeCounterAggressiveness,
+  computeCounterAcceptanceProbability,
+  applyCounterTerms,
+  resolveCounteroffer,
+  FOG_HALF_BASE,
+  COUNTER_REVISED_WINDOW,
 } from '../decision-queue';
-import { makeRunState, makeClient, makeManifest, makeClientStats, makeAgentState, nextId } from './fixtures';
+import { makeRunState, makeClient, makeContract, makeManifest, makeClientStats, makeAgentState, nextId } from './fixtures';
 import { DecisionItem, DecisionOutcome, PushRisk } from '../../types/decision';
-import { ContractDraft } from '../../types/contract';
+import { ContractDraft, CounterTerms } from '../../types/contract';
 import { ContractTemplate } from '../../types/contract';
 
 const makeOutcome = (overrides?: Partial<DecisionOutcome>): DecisionOutcome => ({
@@ -55,6 +64,7 @@ const makeContractDraft = (overrides?: Partial<ContractDraft>): ContractDraft =>
   counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null },
   default_on_ignore: 'reject',
   expires_in: null,
+  exclusivity_scope: null,
   ...overrides,
 });
 
@@ -151,6 +161,42 @@ describe('decision-queue — resolveDecisionItem', () => {
     const result = resolveDecisionItem(state, item.id, 'approve', makeManifest());
     expect(result.contracts).toHaveLength(1);
   });
+
+  it('records random decision branches on the board without adding news clutter', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ marketability: 30 }) });
+    const item = makeDecisionItem({
+      client_id: clientId,
+      options: [
+        {
+          key: 'deny',
+          label: 'Deny It',
+          outcome: makeOutcome({ reputation_delta: 1, stat_deltas: { marketability: 1 } }),
+          random_outcomes: [
+            {
+              key: 'backfire',
+              label: 'Backfired',
+              description: 'The denial drew more scrutiny.',
+              chance: 0.35,
+              marketability_modifier: 0.5,
+              outcome: makeOutcome({ reputation_delta: -4, stat_deltas: { marketability: -5 } }),
+            },
+          ],
+          push_risk: null,
+        },
+      ],
+    });
+    const state = makeRunState({ reputation: 50, roster: [client], decision_board: [item] });
+    const result = resolveDecisionItem(state, item.id, 'deny', makeManifest());
+
+    expect(result.reputation).toBe(46);
+    expect(result.roster[0].stats.marketability.true_value).toBe(25);
+    expect(result.decision_board[0].resolved_result_label).toBe('Backfired');
+    expect(result.decision_board[0].resolved_result_description).toBe('The denial drew more scrutiny.');
+    expect(result.news_feed).toHaveLength(0);
+    jest.restoreAllMocks();
+  });
 });
 
 // ─── applyBoardDefaults ───────────────────────────────────────────────────────
@@ -196,6 +242,23 @@ describe('decision-queue — activateContract', () => {
     const state = makeRunState({ money: 1_000 });
     const result = activateContract(state, draft, makeManifest());
     expect(result.money).toBe(6_000);
+  });
+
+  it('pays only the agency cut for client-entity lump sums', () => {
+    const clientId = nextId();
+    const agentContractId = nextId();
+    const client = makeClient({ id: clientId, agent_contract_id: agentContractId });
+    const agentContract = makeContract({
+      id: agentContractId, tier: 'agent_client', client_id: clientId,
+      your_cut: 20, amount: 0,
+    });
+    const draft = makeContractDraft({
+      tier: 'client_entity', client_id: clientId, entity_id: nextId(),
+      payout_type: 'lump_sum', amount: 5_000, your_cut: null,
+    });
+    const state = makeRunState({ money: 1_000, roster: [client], contracts: [agentContract] });
+    const result = activateContract(state, draft, makeManifest());
+    expect(result.money).toBe(2_000);
   });
 
   it('links agent_contract_id on the client when tier is agent_client', () => {
@@ -259,6 +322,8 @@ const makeContractTemplate = (overrides?: Partial<ContractTemplate>): ContractTe
   valid_arc_stages: [],
   default_on_ignore: 'reject',
   expires_in: null,
+  exclusivity_scope: null,
+  objective_templates: [],
   ...overrides,
 });
 
@@ -296,6 +361,24 @@ describe('decision-queue — hydrateContractOffer', () => {
     expect(draft?.objectives).toHaveLength(0);
   });
 
+  it('generates stronger contract offers for clients with larger fan bases', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const template = makeContractTemplate({
+      amount_range: [10_000, 10_000],
+      talent_scaling: 0.35,
+      form_scaling: 0.35,
+      marketability_scaling: 0.30,
+    });
+    const manifest = makeManifest({ contract_templates: [template] });
+    const lowClientId = nextId();
+    const highClientId = nextId();
+    const lowState = makeRunState({ roster: [makeClient({ id: lowClientId, audience: 1_000, stats: makeClientStats({ talent: 60, form: 60, marketability: 60 }) })] });
+    const highState = makeRunState({ roster: [makeClient({ id: highClientId, audience: 1_000_000, stats: makeClientStats({ talent: 60, form: 60, marketability: 60 }) })] });
+    const lowDraft = hydrateContractOffer(lowState, template.key, lowClientId, manifest);
+    const highDraft = hydrateContractOffer(highState, template.key, highClientId, manifest);
+    expect(highDraft?.amount).toBeGreaterThan(lowDraft?.amount ?? 0);
+  });
+
   it('reveals posture when negotiation level >= 5', () => {
     jest.spyOn(Math, 'random').mockReturnValue(0.5);
     const clientId = nextId();
@@ -304,7 +387,7 @@ describe('decision-queue — hydrateContractOffer', () => {
     const manifest = makeManifest({ contract_templates: [template] });
     const state    = makeRunState({
       roster: [client],
-      agent: makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 5, operations: 0 } }),
+      agent: makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 5, operations: 0, coaching: 0 } }),
     });
     const draft = hydrateContractOffer(state, template.key, clientId, manifest);
     expect(draft?.counterparty_posture.is_revealed).toBe(true);
@@ -564,12 +647,69 @@ describe('decision-queue — generateDecisionBoard persistent items', () => {
   });
 });
 
+describe('decision-queue — generateDecisionBoard campaign-gated templates', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('only generates campaign-gated decisions for matching active campaigns', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const campaignId = nextId();
+    const campaignTemplate = {
+      key: 'tour_press_request',
+      type: 'client_request' as const,
+      description_template: '{client_name} needs a tour press decision.',
+      campaign_type_keys: ['tour'],
+      rep_gate: 0,
+      valid_arc_stages: [] as any[],
+      contract_template_key: null,
+      default_on_ignore_key: 'skip',
+      expires_in: null,
+    };
+    const genericTemplate = {
+      key: 'generic_request',
+      type: 'opportunity' as const,
+      description_template: 'A generic request appears.',
+      rep_gate: 0,
+      valid_arc_stages: [] as any[],
+      contract_template_key: null,
+      default_on_ignore_key: 'skip',
+      expires_in: null,
+    };
+    const manifest = makeManifest({ board_item_templates: [campaignTemplate, genericTemplate] });
+
+    const withoutCampaign = generateDecisionBoard(
+      makeRunState({ roster: [makeClient({ id: clientId })] }),
+      manifest,
+    );
+    expect(withoutCampaign.some(i => i.template_key === 'tour_press_request')).toBe(false);
+
+    const withCampaign = generateDecisionBoard(
+      makeRunState({
+        roster: [makeClient({ id: clientId, name: 'Client A' })],
+        campaigns: [{
+          id: campaignId,
+          client_id: clientId,
+          type_key: 'tour',
+          total_turns: 3,
+          turns_remaining: 3,
+          installment_results: [],
+          pending_objective_ids: [],
+        }],
+      }),
+      manifest,
+    );
+    const gated = withCampaign.find(i => i.template_key === 'tour_press_request');
+    expect(gated?.campaign_id).toBe(campaignId);
+    expect(gated?.client_id).toBe(clientId);
+  });
+});
+
 // ─── activateContract — extra coverage ───────────────────────────────────────
 
 describe('decision-queue — activateContract (prospect promotion)', () => {
   it('promotes prospect to roster on agent_client contract activation', () => {
     const prospectId = nextId();
-    const prospect = { id: prospectId, name: 'Test Prospect', arc_stage: 'rising' as const, stats: makeClientStats(), scouting_invested: 0 };
+    const prospect = { id: prospectId, name: 'Test Prospect', arc_stage: 'rising' as const, audience: 5_000, stats: makeClientStats(), scouting_invested: 0, max_potential: 80 };
     const draft = makeContractDraft({ tier: 'agent_client', client_id: prospectId });
     const state = makeRunState({ roster: [], prospects: [prospect] });
     const result = activateContract(state, draft, makeManifest());
@@ -718,5 +858,415 @@ describe('decision-queue — generateDecisionBoard empty roster', () => {
     const state = makeRunState({ roster: [] });
     const board = generateDecisionBoard(state, manifest);
     expect(board[0].client_id).toBeNull();
+  });
+});
+
+// ─── computeCounterAggressiveness ────────────────────────────────────────────
+
+describe('decision-queue — computeCounterAggressiveness', () => {
+  const baseDraft = makeContractDraft();  // amount=10_000, your_cut=15, obligations_per_turn=500, duration=12
+
+  it('returns 0 when no fields are changed', () => {
+    expect(computeCounterAggressiveness(baseDraft, {})).toBe(0);
+  });
+
+  it('returns positive value when counter requests more money', () => {
+    const result = computeCounterAggressiveness(baseDraft, { amount: 20_000 });
+    expect(result).toBeGreaterThan(0);
+  });
+
+  it('returns negative value when counter proposes less money', () => {
+    const result = computeCounterAggressiveness(baseDraft, { amount: 5_000 });
+    expect(result).toBeLessThan(0);
+  });
+
+  it('returns positive value when counter requests higher cut', () => {
+    const result = computeCounterAggressiveness(baseDraft, { your_cut: 25 });
+    expect(result).toBeGreaterThan(0);
+  });
+
+  it('returns positive value when counter requests fewer obligations', () => {
+    const result = computeCounterAggressiveness(baseDraft, { obligations_per_turn: 0 });
+    expect(result).toBeGreaterThan(0);
+  });
+
+  it('combined aggressive changes produce larger value than a single change', () => {
+    const single   = computeCounterAggressiveness(baseDraft, { amount: 20_000 });
+    const combined = computeCounterAggressiveness(baseDraft, { amount: 20_000, your_cut: 25 });
+    expect(combined).toBeGreaterThan(single);
+  });
+
+  it('result stays within [-1, 1]', () => {
+    const max = computeCounterAggressiveness(baseDraft, { amount: 1_000_000, your_cut: 30, obligations_per_turn: 0, duration: 100 });
+    const min = computeCounterAggressiveness(baseDraft, { amount: 0, your_cut: 0, obligations_per_turn: 10_000, duration: 1 });
+    expect(max).toBeLessThanOrEqual(1);
+    expect(min).toBeGreaterThanOrEqual(-1);
+  });
+
+  it('ignores your_cut contribution when draft.your_cut is null', () => {
+    const noCutDraft = makeContractDraft({ your_cut: null });
+    const withCut    = computeCounterAggressiveness(baseDraft, { your_cut: 25 });
+    const withoutCut = computeCounterAggressiveness(noCutDraft, { your_cut: 25 });
+    expect(withCut).toBeGreaterThan(0);
+    expect(withoutCut).toBe(0);
+  });
+
+  it('ignores counter.your_cut when it is null', () => {
+    const result = computeCounterAggressiveness(baseDraft, { your_cut: null });
+    expect(result).toBe(0);
+  });
+
+  it('duration change increases aggressiveness when asking for longer lock-in', () => {
+    const result = computeCounterAggressiveness(baseDraft, { duration: 24 });
+    expect(result).toBeGreaterThan(0);
+  });
+});
+
+// ─── computeCounterAcceptanceProbability ─────────────────────────────────────
+
+describe('decision-queue — computeCounterAcceptanceProbability', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('true_probability is within [0.05, 0.95]', () => {
+    const draft = makeContractDraft({ counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null } });
+    const state = makeRunState();
+    const range = computeCounterAcceptanceProbability(state, draft, {});
+    expect(range.true_probability).toBeGreaterThanOrEqual(0.05);
+    expect(range.true_probability).toBeLessThanOrEqual(0.95);
+  });
+
+  it('high posture + no aggressiveness → high probability', () => {
+    const draft = makeContractDraft({ counterparty_posture: { true_value: 0.9, is_revealed: true, observed_min: 0.85, observed_max: 0.95 } });
+    const state = makeRunState();
+    const range = computeCounterAcceptanceProbability(state, draft, {});
+    expect(range.true_probability).toBeCloseTo(0.95, 1);
+  });
+
+  it('high aggressiveness reduces probability', () => {
+    const draft = makeContractDraft({ counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null } });
+    const state = makeRunState();
+    const rangeNeutral     = computeCounterAcceptanceProbability(state, draft, {});
+    const rangeAggressive  = computeCounterAcceptanceProbability(state, draft, { amount: 50_000 });
+    expect(rangeAggressive.true_probability).toBeLessThan(rangeNeutral.true_probability);
+  });
+
+  it('higher negotiation level produces a narrower observed range', () => {
+    const draft = makeContractDraft();
+    const lowNeg  = makeRunState({ agent: makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 0, operations: 0, coaching: 0 } }) });
+    const highNeg = makeRunState({ agent: makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 5, operations: 0, coaching: 0 } }) });
+    const low  = computeCounterAcceptanceProbability(lowNeg,  draft, {});
+    const high = computeCounterAcceptanceProbability(highNeg, draft, {});
+    const bandLow  = high.observed_max - high.observed_min;
+    const bandHigh = low.observed_max  - low.observed_min;
+    expect(bandLow).toBeLessThan(bandHigh);
+  });
+
+  it('observed_min and observed_max bracket true_probability', () => {
+    const draft = makeContractDraft();
+    const state = makeRunState();
+    const range = computeCounterAcceptanceProbability(state, draft, {});
+    expect(range.observed_min).toBeLessThanOrEqual(range.true_probability);
+    expect(range.observed_max).toBeGreaterThanOrEqual(range.true_probability);
+  });
+
+  it('fog_half reaches floor of 0.05 at negotiation level 5', () => {
+    const draft = makeContractDraft({ counterparty_posture: { true_value: 0.5, is_revealed: true, observed_min: 0.45, observed_max: 0.55 } });
+    const state = makeRunState({ agent: makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 5, operations: 0, coaching: 0 } }) });
+    const range = computeCounterAcceptanceProbability(state, draft, {});
+    const halfBand = (range.observed_max - range.observed_min) / 2;
+    expect(halfBand).toBeCloseTo(0.05, 1);
+  });
+});
+
+// ─── applyCounterTerms ────────────────────────────────────────────────────────
+
+describe('decision-queue — applyCounterTerms', () => {
+  it('leaves unspecified fields unchanged', () => {
+    const draft = makeContractDraft({ amount: 10_000, your_cut: 15, duration: 12, obligations_per_turn: 500 });
+    const result = applyCounterTerms(draft, { amount: 12_000 });
+    expect(result.amount).toBe(12_000);
+    expect(result.your_cut).toBe(15);
+    expect(result.duration).toBe(12);
+    expect(result.obligations_per_turn).toBe(500);
+  });
+
+  it('applies all specified fields', () => {
+    const draft = makeContractDraft({ amount: 10_000, your_cut: 15, duration: 12, obligations_per_turn: 500 });
+    const counter: CounterTerms = { amount: 14_000, your_cut: 20, duration: 18, obligations_per_turn: 300 };
+    const result = applyCounterTerms(draft, counter);
+    expect(result.amount).toBe(14_000);
+    expect(result.your_cut).toBe(20);
+    expect(result.duration).toBe(18);
+    expect(result.obligations_per_turn).toBe(300);
+  });
+
+  it('can set your_cut to null', () => {
+    const draft = makeContractDraft({ your_cut: 15 });
+    const result = applyCounterTerms(draft, { your_cut: null });
+    expect(result.your_cut).toBeNull();
+  });
+
+  it('returns a new object, not the same reference', () => {
+    const draft = makeContractDraft();
+    const result = applyCounterTerms(draft, { amount: 20_000 });
+    expect(result).not.toBe(draft);
+  });
+});
+
+// ─── resolveCounteroffer ──────────────────────────────────────────────────────
+
+describe('decision-queue — resolveCounteroffer', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const makeBoardItem = (overrides?: Partial<DecisionItem>): DecisionItem => ({
+    id: `itm_${nextId()}`,
+    type: 'contract_offer',
+    template_key: 'test_template',
+    client_id: null,
+    contract_id: null,
+    contract_draft: makeContractDraft(),
+    description: 'Test offer',
+    options: [],
+    default_on_ignore: makeOutcome(),
+    expires_in: null,
+    is_resolved: false,
+    chosen_option_key: null,
+    ...overrides,
+  });
+
+  it('returns state unchanged for an unknown item id', () => {
+    const state = makeRunState();
+    const result = resolveCounteroffer(state, 'unknown_id', {}, makeManifest());
+    expect(result).toBe(state);
+  });
+
+  it('returns state unchanged for an already-resolved item', () => {
+    const item = makeBoardItem({ is_resolved: true, chosen_option_key: 'approve' });
+    const state = makeRunState({ decision_board: [item] });
+    const result = resolveCounteroffer(state, item.id, {}, makeManifest());
+    expect(result).toBe(state);
+  });
+
+  it('returns state unchanged when item has no contract_draft', () => {
+    const item = makeBoardItem({ contract_draft: null });
+    const state = makeRunState({ decision_board: [item] });
+    const result = resolveCounteroffer(state, item.id, {}, makeManifest());
+    expect(result).toBe(state);
+  });
+
+  it('accepted path: activates contract and resolves item with counter_accepted', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01); // guaranteed accepted
+    const clientId = nextId();
+    const client   = makeClient({ id: clientId });
+    const draft    = makeContractDraft({ client_id: clientId, counterparty_posture: { true_value: 0.8, is_revealed: true, observed_min: 0.75, observed_max: 0.85 } });
+    const item     = makeBoardItem({ client_id: clientId, contract_draft: draft });
+    const state    = makeRunState({ roster: [client], decision_board: [item] });
+    const result   = resolveCounteroffer(state, item.id, { amount: 12_000 }, makeManifest());
+    expect(result.contracts).toHaveLength(1);
+    expect(result.decision_board[0].is_resolved).toBe(true);
+    expect(result.decision_board[0].chosen_option_key).toBe('counter_accepted');
+  });
+
+  it('accepted path: activated contract reflects the counter terms', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const client   = makeClient({ id: clientId });
+    const draft    = makeContractDraft({ client_id: clientId, amount: 10_000, counterparty_posture: { true_value: 0.9, is_revealed: true, observed_min: 0.85, observed_max: 0.95 } });
+    const item     = makeBoardItem({ client_id: clientId, contract_draft: draft });
+    const state    = makeRunState({ roster: [client], decision_board: [item] });
+    const result   = resolveCounteroffer(state, item.id, { amount: 13_000 }, makeManifest());
+    expect(result.contracts[0].amount).toBe(13_000);
+  });
+
+  it('revised path: item stays unresolved and draft is updated toward counter terms', () => {
+    // counter {amount: 20_000} vs original 10_000 → aggressiveness ≈ 0.45
+    // posture=0.5, negMod=0 → true_prob ≈ 0.23; revised window [0.23, 0.48]
+    // Roll 0.35 falls inside the revised window.
+    jest.spyOn(Math, 'random').mockReturnValue(0.35);
+    const draft = makeContractDraft({ amount: 10_000, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null } });
+    const item  = makeBoardItem({ contract_draft: draft });
+    const state = makeRunState({ decision_board: [item] });
+    const result = resolveCounteroffer(state, item.id, { amount: 20_000 }, makeManifest());
+    expect(result.decision_board[0].is_resolved).toBe(false);
+    // Revised amount should be between original and counter
+    expect(result.decision_board[0].contract_draft?.amount).toBeGreaterThan(10_000);
+    expect(result.decision_board[0].contract_draft?.amount).toBeLessThan(20_000);
+  });
+
+  it('rejected path: reputation decremented and item resolved with counter_rejected', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.99); // guaranteed rejected
+    const draft = makeContractDraft({ counterparty_posture: { true_value: 0.1, is_revealed: false, observed_min: null, observed_max: null } });
+    const item  = makeBoardItem({ contract_draft: draft });
+    const state = makeRunState({ reputation: 50, decision_board: [item] });
+    const result = resolveCounteroffer(state, item.id, { amount: 1_000_000 }, makeManifest());
+    expect(result.reputation).toBeLessThan(50);
+    expect(result.decision_board[0].is_resolved).toBe(true);
+    expect(result.decision_board[0].chosen_option_key).toBe('counter_rejected');
+  });
+
+  it('revised path produces a larger compromise at higher negotiation', () => {
+    // aggressiveness ≈ 0.45 from doubling amount; negMod=0 → true_prob≈0.23, window [0.23,0.48]
+    // negMod=0.4 → true_prob≈0.31, window [0.31,0.56]. Roll 0.35 lands in both windows.
+    const rollValue = 0.35;
+    const draft = makeContractDraft({ amount: 10_000, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null } });
+
+    jest.spyOn(Math, 'random').mockReturnValue(rollValue);
+    const lowNegState  = makeRunState({ decision_board: [{ ...makeBoardItem({ contract_draft: draft }), id: 'itm_low' }], agent: makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 0, operations: 0, coaching: 0 } }) });
+    const lowResult    = resolveCounteroffer(lowNegState,  'itm_low',  { amount: 20_000 }, makeManifest());
+
+    jest.spyOn(Math, 'random').mockReturnValue(rollValue);
+    const highNegState = makeRunState({ decision_board: [{ ...makeBoardItem({ contract_draft: draft }), id: 'itm_high' }], agent: makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 5, operations: 0, coaching: 0 } }) });
+    const highResult   = resolveCounteroffer(highNegState, 'itm_high', { amount: 20_000 }, makeManifest());
+
+    const lowRevised  = lowResult.decision_board[0].contract_draft?.amount  ?? 0;
+    const highRevised = highResult.decision_board[0].contract_draft?.amount ?? 0;
+    expect(highRevised).toBeGreaterThan(lowRevised);
+  });
+
+  it('only modifies the target item in a multi-item board', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01); // accepted
+    const clientId = nextId();
+    const client   = makeClient({ id: clientId });
+    const draft    = makeContractDraft({ client_id: clientId, counterparty_posture: { true_value: 0.9, is_revealed: true, observed_min: 0.85, observed_max: 0.95 } });
+    const targetItem = makeBoardItem({ id: 'itm_target', client_id: clientId, contract_draft: draft });
+    const otherItem  = makeBoardItem({ id: 'itm_other' });
+    const state      = makeRunState({ roster: [client], decision_board: [targetItem, otherItem] });
+    const result     = resolveCounteroffer(state, 'itm_target', {}, makeManifest());
+    expect(result.decision_board.find(i => i.id === 'itm_target')?.is_resolved).toBe(true);
+    expect(result.decision_board.find(i => i.id === 'itm_other')?.is_resolved).toBe(false);
+  });
+});
+
+// ─── generateContractRenewalOffers ───────────────────────────────────────────
+
+const makeRenewalManifest = () => {
+  const contractTemplate = makeContractTemplate({
+    key: 'agent_renewal',
+    tier: 'agent_client',
+    payout_type: 'per_month',
+    cut_range: [10, 20],
+  });
+  const renewalBoardTemplate = {
+    key: 'management_renewal',
+    type: 'renewal' as const,
+    description_template: '{client_name} wants to renew the management deal.',
+    rep_gate: 0,
+    valid_arc_stages: ['rising', 'peak', 'declining'] as any[],
+    contract_template_key: 'agent_renewal',
+    default_on_ignore_key: 'let_expire',
+    expires_in: 2,
+  };
+  return makeManifest({
+    contract_templates: [contractTemplate],
+    board_item_templates: [renewalBoardTemplate],
+  });
+};
+
+describe('decision-queue — generateContractRenewalOffers', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('generates a renewal offer for a happy client whose contract is almost expired', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ morale: RENEWAL_MORALE_THRESHOLD }) });
+    const contract = makeContract({ client_id: clientId, tier: 'agent_client', duration_remaining: RENEWAL_NOTICE_TURNS });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+    const offers = generateContractRenewalOffers(state, makeRenewalManifest());
+    expect(offers).toHaveLength(1);
+    expect(offers[0].type).toBe('renewal');
+    expect(offers[0].client_id).toBe(clientId);
+    expect(offers[0].contract_id).toBe(contract.id);
+  });
+
+  it('does not generate a renewal offer when client morale is below threshold', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ morale: RENEWAL_MORALE_THRESHOLD - 1 }) });
+    const contract = makeContract({ client_id: clientId, tier: 'agent_client', duration_remaining: RENEWAL_NOTICE_TURNS });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+    const offers = generateContractRenewalOffers(state, makeRenewalManifest());
+    expect(offers).toHaveLength(0);
+  });
+
+  it('does not generate a renewal offer when contract has many turns remaining', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ morale: 80 }) });
+    const contract = makeContract({ client_id: clientId, tier: 'agent_client', duration_remaining: RENEWAL_NOTICE_TURNS + 1 });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+    const offers = generateContractRenewalOffers(state, makeRenewalManifest());
+    expect(offers).toHaveLength(0);
+  });
+
+  it('does not generate a renewal offer for an already-expired contract (duration_remaining = 0)', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ morale: 80 }) });
+    const contract = makeContract({ client_id: clientId, tier: 'agent_client', duration_remaining: 0 });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+    const offers = generateContractRenewalOffers(state, makeRenewalManifest());
+    expect(offers).toHaveLength(0);
+  });
+
+  it('does not generate a second renewal when one is already unresolved on the board', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ morale: 80 }) });
+    const contract = makeContract({ client_id: clientId, tier: 'agent_client', duration_remaining: 2 });
+    const existingRenewal = makeDecisionItem({ type: 'renewal', client_id: clientId, is_resolved: false });
+    const state = makeRunState({ roster: [client], contracts: [contract], decision_board: [existingRenewal] });
+    const offers = generateContractRenewalOffers(state, makeRenewalManifest());
+    expect(offers).toHaveLength(0);
+  });
+
+  it('generates a renewal when the existing renewal for this client is already resolved', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ morale: 80 }) });
+    const contract = makeContract({ client_id: clientId, tier: 'agent_client', duration_remaining: 2 });
+    const resolvedRenewal = makeDecisionItem({ type: 'renewal', client_id: clientId, is_resolved: true, chosen_option_key: 'reject' });
+    const state = makeRunState({ roster: [client], contracts: [contract], decision_board: [resolvedRenewal] });
+    const offers = generateContractRenewalOffers(state, makeRenewalManifest());
+    expect(offers).toHaveLength(1);
+  });
+
+  it('does not generate a renewal when no manifest template matches the contract tier', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ morale: 80 }) });
+    // Contract is client_entity but manifest only has agent_client renewal template
+    const contract = makeContract({ client_id: clientId, tier: 'client_entity', duration_remaining: 2 });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+    const offers = generateContractRenewalOffers(state, makeRenewalManifest());
+    expect(offers).toHaveLength(0);
+  });
+
+  it('includes a contract_draft on the renewal item', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ morale: 80 }) });
+    const contract = makeContract({ client_id: clientId, tier: 'agent_client', duration_remaining: 1 });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+    const offers = generateContractRenewalOffers(state, makeRenewalManifest());
+    expect(offers[0].contract_draft).not.toBeNull();
+  });
+});
+
+describe('decision-queue — generateDecisionBoard includes triggered renewals', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('renewal item appears on the board for a happy client with near-expiry contract', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, arc_stage: 'rising', stats: makeClientStats({ morale: 80 }) });
+    const contract = makeContract({ client_id: clientId, tier: 'agent_client', duration_remaining: 2 });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+    const board = generateDecisionBoard(state, makeRenewalManifest());
+    const renewal = board.find(i => i.type === 'renewal');
+    expect(renewal).toBeDefined();
+    expect(renewal?.client_id).toBe(clientId);
+  });
+
+  it('renewal item does not appear for an unhappy client', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, arc_stage: 'rising', stats: makeClientStats({ morale: RENEWAL_MORALE_THRESHOLD - 1 }) });
+    const contract = makeContract({ client_id: clientId, tier: 'agent_client', duration_remaining: 2 });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+    const board = generateDecisionBoard(state, makeRenewalManifest());
+    expect(board.some(i => i.type === 'renewal')).toBe(false);
   });
 });

@@ -1,16 +1,21 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { DecisionItem } from '../types/decision';
+import { Contract, ContractDraft } from '../types/contract';
 import { ContractSummary } from './ContractSummary';
-import { Colors, FontSize, Spacing, Radius } from '../theme';
+import { canCounterDecisionItem } from './decision-card-rules';
+import { Colors, FontSize, Spacing, Radius, formatDelta, formatMoney } from '../theme';
 
 export interface DecisionCardProps {
   item: DecisionItem;
   clientName?: string;
   clientLabel?: string;
   entityLabel?: string;
+  agentCutPercent?: number | null;
   isPushEnabled: boolean;
+  previousContract?: Contract | null;
   onResolve: (itemId: string, optionKey: string) => void;
+  onOpenCounter: (itemId: string, draft: ContractDraft) => void;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -32,16 +37,19 @@ export function DecisionCard({
   clientName,
   clientLabel = 'Client',
   entityLabel = 'Entity',
+  agentCutPercent,
   isPushEnabled,
+  previousContract,
   onResolve,
+  onOpenCounter,
 }: DecisionCardProps) {
-  if (item.is_resolved) return null;
-
   const isExpiringSoon = item.expires_in !== null && item.expires_in <= 1;
   const typeColor = TYPE_COLORS[item.type] ?? Colors.textSecondary;
   const visibleOptions = item.options.filter(
     o => o.key !== 'push' || isPushEnabled,
   );
+  const canCounter = canCounterDecisionItem(item);
+  const resolvedSummary = formatOutcomeSummary(item.resolved_outcome);
 
   return (
     <View style={[styles.card, isExpiringSoon && styles.cardUrgent]}>
@@ -69,26 +77,72 @@ export function DecisionCard({
             clientLabel={clientLabel}
             entityLabel={entityLabel}
             showPosture={false}
+            agentCutPercent={agentCutPercent}
+            previousContract={previousContract}
           />
         </View>
       )}
 
-      <View style={styles.options}>
-        {visibleOptions.map(opt => (
-          <TouchableOpacity
-            key={opt.key}
-            style={[styles.optionBtn, optionStyle(opt.key)]}
-            onPress={() => onResolve(item.id, opt.key)}
-            accessibilityLabel={opt.label}
-          >
-            <Text style={[styles.optionText, opt.key === 'reject' && styles.optionRejectText]}>
-              {opt.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      {item.is_resolved ? (
+        <View style={styles.result}>
+          <Text style={styles.resultTitle}>{item.resolved_result_label ?? 'Resolved'}</Text>
+          <Text style={styles.resultBody}>
+            {item.resolved_result_description ?? resolvedSummary}
+          </Text>
+          {item.resolved_result_description && item.resolved_outcome && (
+            <Text style={styles.resultDelta}>{resolvedSummary}</Text>
+          )}
+        </View>
+      ) : (
+        <View style={styles.options}>
+          {visibleOptions.map(opt => (
+            <TouchableOpacity
+              key={opt.key}
+              style={[styles.optionBtn, optionStyle(opt.key)]}
+              onPress={() => onResolve(item.id, opt.key)}
+              accessibilityLabel={opt.label}
+            >
+              <Text style={[styles.optionText, opt.key === 'reject' && styles.optionRejectText]}>
+                {formatOptionLabel(opt)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+          {canCounter && item.contract_draft && (
+            <TouchableOpacity
+              style={[styles.optionBtn, styles.counterBtn]}
+              onPress={() => onOpenCounter(item.id, item.contract_draft!)}
+              accessibilityLabel="Counter offer"
+            >
+              <Text style={styles.optionText}>Counter</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
     </View>
   );
+}
+
+function formatOptionLabel(option: DecisionItem['options'][number]): string {
+  const deltas: string[] = [];
+  const outcome = option.outcome;
+  if (outcome.money_delta !== 0) deltas.push(formatMoney(outcome.money_delta));
+  if (outcome.reputation_delta !== 0) deltas.push(`${formatDelta(outcome.reputation_delta)} rep`);
+  if (option.key === 'push' && option.push_risk) deltas.push('uncertain');
+  if (option.random_outcomes?.length) {
+    deltas.push('chance');
+  }
+  return deltas.length ? `${option.label} (${deltas.join(', ')})` : option.label;
+}
+
+function formatOutcomeSummary(outcome?: DecisionItem['resolved_outcome']): string {
+  if (!outcome) return 'No immediate change.';
+  const deltas: string[] = [];
+  if (outcome.money_delta !== 0) deltas.push(formatMoney(outcome.money_delta));
+  if (outcome.reputation_delta !== 0) deltas.push(`${formatDelta(outcome.reputation_delta)} rep`);
+  for (const [key, delta] of Object.entries(outcome.stat_deltas)) {
+    if (delta !== 0) deltas.push(`${formatDelta(delta)} ${key}`);
+  }
+  return deltas.length ? deltas.join(', ') : 'No immediate change.';
 }
 
 function optionStyle(key: string): object {
@@ -168,5 +222,33 @@ const styles = StyleSheet.create({
   },
   optionRejectText: {
     color: Colors.textSecondary,
+  },
+  counterBtn: {
+    backgroundColor: Colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: Colors.accent,
+  },
+  result: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surfaceRaised,
+    padding: Spacing.md,
+    gap: Spacing.xs,
+  },
+  resultTitle: {
+    color: Colors.textPrimary,
+    fontSize: FontSize.sm,
+    fontWeight: '700',
+  },
+  resultBody: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+    lineHeight: 18,
+  },
+  resultDelta: {
+    color: Colors.textPrimary,
+    fontSize: FontSize.xs,
+    fontWeight: '600',
   },
 });

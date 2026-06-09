@@ -18,7 +18,7 @@ import {
   computeAgentStatUpgradeCost,
   computeInfrastructureUpgradeCost,
 } from '../engine/progression';
-import { computeCreditCeiling } from '../engine/failure';
+import { computeCreditCeiling, computeCreditHeadroom } from '../engine/failure';
 import { Colors, FontSize, Spacing, Radius, formatMoney } from '../theme';
 import { AgentStats } from '../types/agent';
 
@@ -26,17 +26,21 @@ export type AgencyScreenProps = NativeStackScreenProps<TabParamList, 'Agency'>;
 
 const AGENT_STAT_DESCS: Record<keyof AgentStats, string> = {
   stat_scouting:    'Narrows talent fog bands on scouting',
-  insight_scouting: 'Narrows form & morale fog bands',
+  insight_scouting: 'Narrows form, marketability, and morale fog bands',
   negotiation:      'Improves contract terms and reveals posture',
   operations:       'Lowers overhead and client costs',
+  coaching:         'Boosts talent growth speed and probability for all clients',
 };
 
 const INFRA_DESCS: Record<InfrastructureUpgradeKey, string> = {
-  roster_slot: 'Increase max roster capacity (+1)',
-  insurance:   'Reduces frequency of client health events',
-  pr:          'Reduces frequency of PR/reputation events',
-  legal:       'Reduces frequency of legal events',
-  medical:     'Reduces frequency of medical events',
+  roster_slot:       'Increase max roster capacity (+1)',
+  insurance:         'Reduces frequency of client health events',
+  pr:                'Reduces frequency of PR/reputation events',
+  legal:             'Reduces frequency of legal events',
+  medical:           'Reduces frequency of medical events',
+  training_facility: 'Improves form and sharpens talent/form scouting',
+  media_studio:      'Improves marketability and sharpens market reads',
+  wellness_suite:    'Improves morale and sharpens morale reads',
 };
 
 export function AgencyScreen() {
@@ -68,13 +72,14 @@ export function AgencyScreen() {
   const phase   = runState.phase;
 
   const statKeys: (keyof AgentStats)[] = [
-    'stat_scouting', 'insight_scouting', 'negotiation', 'operations',
+    'stat_scouting', 'insight_scouting', 'negotiation', 'operations', 'coaching',
   ];
   const infraKeys: InfrastructureUpgradeKey[] = [
-    'roster_slot', 'insurance', 'pr', 'legal', 'medical',
+    'roster_slot', 'training_facility', 'media_studio', 'wellness_suite', 'insurance', 'pr', 'legal', 'medical',
   ];
 
   const creditCeiling = computeCreditCeiling(runState, manifest);
+  const creditHeadroom = computeCreditHeadroom(runState, manifest);
 
   function handleRetire() {
     if (phase !== 'decision') {
@@ -105,8 +110,19 @@ export function AgencyScreen() {
       Alert.alert('Invalid amount', 'Enter a positive number.');
       return;
     }
+    if (amount > creditHeadroom) {
+      Alert.alert('No credit available', `You can borrow up to ${formatMoney(creditHeadroom)} right now.`);
+      return;
+    }
+    const before = useRunStore.getState().state;
     takeLoan(amount);
+    const after = useRunStore.getState().state;
     setLoanInput('');
+    if (after && before && after.money > before.money && after.debt.balance > before.debt.balance) {
+      Alert.alert('Loan approved', `${formatMoney(amount)} added to your balance.`);
+    } else {
+      Alert.alert('Loan unavailable', 'Your current credit headroom is not enough for that loan.');
+    }
   }
 
   return (
@@ -177,6 +193,10 @@ export function AgencyScreen() {
             <Text style={styles.bankLabel}>Credit ceiling</Text>
             <Text style={styles.bankValue}>{formatMoney(creditCeiling)}</Text>
           </View>
+          <View style={styles.bankRow}>
+            <Text style={styles.bankLabel}>Available credit</Text>
+            <Text style={styles.bankValue}>{formatMoney(creditHeadroom)}</Text>
+          </View>
           {debt && debt.is_active && (
             <>
               <View style={styles.bankRow}>
@@ -198,8 +218,12 @@ export function AgencyScreen() {
               placeholderTextColor={Colors.textDim}
               keyboardType="numeric"
             />
-            <TouchableOpacity style={styles.loanBtn} onPress={handleTakeLoan}>
-              <Text style={styles.loanBtnText}>Take Loan</Text>
+            <TouchableOpacity
+              style={[styles.loanBtn, creditHeadroom <= 0 && styles.btnDisabled]}
+              onPress={handleTakeLoan}
+              disabled={creditHeadroom <= 0}
+            >
+              <Text style={[styles.loanBtnText, creditHeadroom <= 0 && styles.textDim]}>Take Loan</Text>
             </TouchableOpacity>
           </View>
         </Section>

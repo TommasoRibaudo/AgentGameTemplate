@@ -111,6 +111,28 @@ describe('validateManifest — event defense_track_key', () => {
   });
 });
 
+describe('validateManifest — campaign_type_keys', () => {
+  it('throws when an event references an unknown campaign type key', () => {
+    const m = valid();
+    (m.events as { campaign_type_keys?: string[] }[])[0].campaign_type_keys = ['missing_campaign'];
+    expect(() => validateManifest(m)).toThrow(/unknown campaign_type_key/);
+  });
+
+  it('throws when a board item references an unknown campaign type key', () => {
+    const m = valid();
+    (m.board_item_templates as { campaign_type_keys?: string[] }[])[0].campaign_type_keys = ['missing_campaign'];
+    expect(() => validateManifest(m)).toThrow(/unknown campaign_type_key/);
+  });
+
+  it('accepts event and board item campaign gates with known campaign type keys', () => {
+    const m = valid();
+    const campaignKey = ((m.campaign_types as { key: string }[])[0]).key;
+    (m.events as { campaign_type_keys?: string[] }[])[0].campaign_type_keys = [campaignKey];
+    (m.board_item_templates as { campaign_type_keys?: string[] }[])[0].campaign_type_keys = [campaignKey];
+    expect(() => validateManifest(m)).not.toThrow();
+  });
+});
+
 // ─── Economy validation ───────────────────────────────────────────────────────
 
 describe('validateManifest — economy', () => {

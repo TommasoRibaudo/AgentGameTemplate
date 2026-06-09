@@ -16,6 +16,7 @@ export const SPORTS_MANIFEST: VariantManifest = {
     agent:      'Agent',
     money:      'Budget',
     reputation: 'Prestige',
+    audience:   'Followers',
     stat_labels: {
       talent:        'Athleticism',
       form:          'Match Form',
@@ -252,7 +253,7 @@ export const SPORTS_MANIFEST: VariantManifest = {
       tier:                 'agent_client',
       payout_type:          'per_month',
       amount_range:         [1_500, 4_000],
-      duration_range:       [8, 24],
+      duration_range:       [24, 48],
       cut_range:            [10, 20],
       obligations_range:    [500, 1_500],
       talent_scaling:       0.5,
@@ -268,7 +269,7 @@ export const SPORTS_MANIFEST: VariantManifest = {
       tier:                 'client_entity',
       payout_type:          'per_month',
       amount_range:         [10_000, 80_000],
-      duration_range:       [6, 24],
+      duration_range:       [12, 36],
       cut_range:            null,
       obligations_range:    [1_000, 3_000],
       talent_scaling:       0.6,
@@ -284,7 +285,7 @@ export const SPORTS_MANIFEST: VariantManifest = {
       tier:                 'client_entity',
       payout_type:          'lump_sum',
       amount_range:         [15_000, 120_000],
-      duration_range:       [4, 12],
+      duration_range:       [6, 24],
       cut_range:            null,
       obligations_range:    [500, 1_500],
       talent_scaling:       0.1,
@@ -300,7 +301,7 @@ export const SPORTS_MANIFEST: VariantManifest = {
       tier:                 'client_entity',
       payout_type:          'per_objective',
       amount_range:         [5_000, 30_000],
-      duration_range:       [2, 6],
+      duration_range:       [3, 12],
       cut_range:            null,
       obligations_range:    [200, 800],
       talent_scaling:       0.0,
@@ -355,6 +356,16 @@ export const SPORTS_MANIFEST: VariantManifest = {
       contract_template_key: null,
       default_on_ignore_key: 'skip',
       expires_in:            null,
+    },
+    {
+      key:                   'press_scandal_response',
+      type:                  'client_request',
+      description_template:  'A press rumor about {client_name} is catching fire. Pick a response before sponsors react.',
+      rep_gate:              0,
+      valid_arc_stages:      ['rising', 'peak', 'declining'],
+      contract_template_key: null,
+      default_on_ignore_key: 'go_quiet',
+      expires_in:            1,
     },
     {
       key:                   'loyalty_bonus_renewal',
@@ -413,6 +424,7 @@ export const SPORTS_MANIFEST: VariantManifest = {
     agent_stat_upgrade_cost:     { money: 2_000, reputation: 5 },
     roster_slot_upgrade_cost:    { money: 5_000 },
     defense_track_upgrade_cost:  { money: 2_000, per_turn_recurring: 200 },
+    income_satisfaction_threshold: 20_000,  // comfortable per_month entity income at peak arc stage
   },
 
   // ── Arc config ────────────────────────────────────────────────────────────────

@@ -28,6 +28,8 @@ export function TopBar({
   moneyLabel,
   reputationLabel,
 }: TopBarProps) {
+  const turnDate = formatTurnDate(turnNumber);
+
   return (
     <View style={[styles.bar, lowMoneyWarning && styles.warnBg]}>
       <Cell label={moneyLabel} value={formatMoney(money)} valueStyle={money < 0 ? styles.negative : undefined} />
@@ -36,7 +38,12 @@ export function TopBar({
       <Divider />
       <Cell label="Roster" value={`${rosterCount}/${rosterCapacity}`} />
       <Divider />
-      <Cell label="Turn" value={`${turnNumber}/${careerLength}`} />
+      <Cell label="Date" value={turnDate} />
+      {lowMoneyWarning && (
+        <View style={styles.warningBadge}>
+          <Text style={styles.warningText}>LOW CASH</Text>
+        </View>
+      )}
       {isInDebt && (
         <View style={styles.debtBadge}>
           <Text style={styles.debtText}>DEBT</Text>
@@ -44,6 +51,12 @@ export function TopBar({
       )}
     </View>
   );
+}
+
+function formatTurnDate(turnNumber: number): string {
+  const date = new Date(new Date().getFullYear(), 0, 1);
+  date.setDate(date.getDate() + Math.max(0, turnNumber - 1) * 7);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function Cell({ label, value, valueStyle }: { label: string; value: string; valueStyle?: object }) {
@@ -105,6 +118,18 @@ const styles = StyleSheet.create({
   },
   debtText: {
     color: Colors.textPrimary,
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  warningBadge: {
+    backgroundColor: Colors.warning,
+    borderRadius: 3,
+    paddingHorizontal: Spacing.xs,
+    paddingVertical: 2,
+  },
+  warningText: {
+    color: Colors.bg,
     fontSize: FontSize.xs,
     fontWeight: '700',
     letterSpacing: 0.5,

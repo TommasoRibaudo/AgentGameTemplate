@@ -15,6 +15,7 @@ describe('createNewRun', () => {
       agent_stat_upgrade_cost:     { money: 2_000, reputation: 5 },
       roster_slot_upgrade_cost:    { money: 5_000 },
       defense_track_upgrade_cost:  { money: 2_000, per_turn_recurring: 200 },
+      income_satisfaction_threshold: 8_000,
     },
   });
 

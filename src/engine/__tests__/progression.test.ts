@@ -5,8 +5,13 @@ import {
   upgradeAgentStat,
   computeInfrastructureUpgradeCost,
   upgradeInfrastructure,
+  applyBuildingDevelopment,
+  boostClientStat,
+  applyContractSatisfaction,
+  CLIENT_BOOST_AMOUNT,
+  CLIENT_BOOST_COST,
 } from '../progression';
-import { makeRunState, makeManifest, makeAgentState } from './fixtures';
+import { makeRunState, makeManifest, makeAgentState, makeClient, makeClientStats, makeContract } from './fixtures';
 
 describe('progression — computeOperationsMultiplier', () => {
   it('returns 1.0 at level 0',        () => expect(computeOperationsMultiplier(0)).toBeCloseTo(1.0));
@@ -34,7 +39,7 @@ describe('progression — computeAgentStatUpgradeCost', () => {
   it('scales with current level', () => {
     const manifest = makeManifest();
     const state = makeRunState({
-      agent: makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 0, operations: 2 } }),
+      agent: makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 0, operations: 2, coaching: 0 } }),
     });
     const cost = computeAgentStatUpgradeCost(state, 'operations', manifest);
     // multiplier = 1 + 2 * 0.5 = 2.0
@@ -133,5 +138,187 @@ describe('progression — upgradeInfrastructure', () => {
     const result = upgradeInfrastructure(state, 'roster_slot', makeManifest());
     expect(result.agent.roster_capacity).toBe(state.agent.roster_capacity);
     expect(result.money).toBe(0);
+  });
+});
+
+describe('progression building development', () => {
+  it('improves matching client stats each turn based on building level', () => {
+    const client = makeClient({ stats: makeClientStats({ form: 40, marketability: 50, morale: 60 }) });
+    const state = makeRunState({
+      roster: [client],
+      agent: makeAgentState({
+        defense_tracks: [
+          { key: 'training_facility', level: 2, per_turn_cost: 300 },
+          { key: 'media_studio', level: 1, per_turn_cost: 300 },
+        ],
+      }),
+    });
+
+    const result = applyBuildingDevelopment(state);
+
+    expect(result.roster[0].stats.form.true_value).toBe(42);
+    expect(result.roster[0].stats.marketability.true_value).toBe(51);
+    expect(result.roster[0].stats.morale.true_value).toBe(60);
+  });
+
+  it('does not improve talent because talent is a fixed ceiling', () => {
+    const client = makeClient({ stats: makeClientStats({ talent: 40 }) });
+    const state = makeRunState({
+      roster: [client],
+      agent: makeAgentState({
+        defense_tracks: [{ key: 'training_facility', level: 3, per_turn_cost: 300 }],
+      }),
+    });
+
+    const result = applyBuildingDevelopment(state);
+
+    expect(result.roster[0].stats.talent.true_value).toBe(40);
+  });
+});
+
+describe('progression boostClientStat', () => {
+  it('spends money and immediately improves one client stat', () => {
+    const client = makeClient({ stats: makeClientStats({ form: 40 }) });
+    const state = makeRunState({ money: CLIENT_BOOST_COST, roster: [client] });
+
+    const result = boostClientStat(state, client.id, 'form');
+
+    expect(result.money).toBe(0);
+    expect(result.roster[0].stats.form.true_value).toBe(40 + CLIENT_BOOST_AMOUNT);
+  });
+
+  it('returns state unchanged if the agency cannot afford the boost', () => {
+    const client = makeClient({ stats: makeClientStats({ morale: 40 }) });
+    const state = makeRunState({ money: CLIENT_BOOST_COST - 1, roster: [client] });
+
+    const result = boostClientStat(state, client.id, 'morale');
+
+    expect(result).toBe(state);
+  });
+});
+
+describe('progression applyContractSatisfaction', () => {
+  // Manifest threshold = 8_000 at peak (income mult 1.0); rising mult = 0.6 → expected = 4_800
+
+  it('reduces morale when a client has no entity contracts', () => {
+    const client = makeClient({ arc_stage: 'peak', stats: makeClientStats({ morale: 70 }) });
+    const state = makeRunState({ roster: [client], contracts: [] });
+
+    const result = applyContractSatisfaction(state, makeManifest());
+
+    // incomeComponent = -2, fanComponent = 0 → delta = -2
+    expect(result.roster[0].stats.morale.true_value).toBe(68);
+  });
+
+  it('increases morale when entity income exceeds 1.5× the arc-scaled threshold', () => {
+    const client = makeClient({ arc_stage: 'peak', stats: makeClientStats({ morale: 60 }) });
+    const entityContract = makeContract({
+      tier: 'client_entity',
+      client_id: client.id,
+      payout_type: 'per_month',
+      amount: 13_000, // > 8_000 * 1.5 = 12_000
+    });
+    const state = makeRunState({ roster: [client], contracts: [entityContract] });
+
+    const result = applyContractSatisfaction(state, makeManifest());
+
+    // incomeComponent = +2, fanComponent = 0 → delta = +2
+    expect(result.roster[0].stats.morale.true_value).toBe(62);
+  });
+
+  it('gives +1 income component when income meets but does not exceed 1.5× threshold', () => {
+    const client = makeClient({ arc_stage: 'peak', stats: makeClientStats({ morale: 50 }) });
+    const entityContract = makeContract({
+      tier: 'client_entity',
+      client_id: client.id,
+      payout_type: 'per_month',
+      amount: 9_000, // >= 8_000 but < 12_000
+    });
+    const state = makeRunState({ roster: [client], contracts: [entityContract] });
+
+    const result = applyContractSatisfaction(state, makeManifest());
+
+    // incomeComponent = +1, fanComponent = 0 → delta = +1
+    expect(result.roster[0].stats.morale.true_value).toBe(51);
+  });
+
+  it('adds fan component when last campaign had positive fan_delta', () => {
+    const campaignHistory = [{
+      id: 'ch1', type_key: 'tour', label: 'Tour', started_turn: 1, completed_turn: 2,
+      total_turns: 2, installment_results: [], release_id: null,
+      summary: { money_delta: 0, reputation_delta: 0, fan_delta: 5_000 },
+      visible_notes: [],
+    }];
+    const client = makeClient({
+      arc_stage: 'peak', stats: makeClientStats({ morale: 50 }), campaign_history: campaignHistory,
+    });
+    const entityContract = makeContract({
+      tier: 'client_entity', client_id: client.id, payout_type: 'per_month', amount: 9_000,
+    });
+    const state = makeRunState({ roster: [client], contracts: [entityContract] });
+
+    const result = applyContractSatisfaction(state, makeManifest());
+
+    // incomeComponent = +1, fanComponent = +1 → delta = +2
+    expect(result.roster[0].stats.morale.true_value).toBe(52);
+  });
+
+  it('subtracts fan component when last campaign had negative fan_delta', () => {
+    const campaignHistory = [{
+      id: 'ch1', type_key: 'tour', label: 'Tour', started_turn: 1, completed_turn: 2,
+      total_turns: 2, installment_results: [], release_id: null,
+      summary: { money_delta: 0, reputation_delta: 0, fan_delta: -2_000 },
+      visible_notes: [],
+    }];
+    const client = makeClient({
+      arc_stage: 'peak', stats: makeClientStats({ morale: 50 }), campaign_history: campaignHistory,
+    });
+    const entityContract = makeContract({
+      tier: 'client_entity', client_id: client.id, payout_type: 'per_month', amount: 9_000,
+    });
+    const state = makeRunState({ roster: [client], contracts: [entityContract] });
+
+    const result = applyContractSatisfaction(state, makeManifest());
+
+    // incomeComponent = +1, fanComponent = -1 → delta = 0 → morale unchanged
+    expect(result.roster[0].stats.morale.true_value).toBe(50);
+  });
+
+  it('clamps total delta to -2 even when both components are negative', () => {
+    const campaignHistory = [{
+      id: 'ch1', type_key: 'tour', label: 'Tour', started_turn: 1, completed_turn: 2,
+      total_turns: 2, installment_results: [], release_id: null,
+      summary: { money_delta: 0, reputation_delta: 0, fan_delta: -1_000 },
+      visible_notes: [],
+    }];
+    const client = makeClient({
+      arc_stage: 'peak', stats: makeClientStats({ morale: 60 }), campaign_history: campaignHistory,
+    });
+    const state = makeRunState({ roster: [client], contracts: [] });
+
+    const result = applyContractSatisfaction(state, makeManifest());
+
+    // incomeComponent = -2, fanComponent = -1 → unclamped = -3, clamped to -2
+    expect(result.roster[0].stats.morale.true_value).toBe(58);
+  });
+
+  it('scales expected income by the arc income multiplier', () => {
+    // rising mult = 0.6 → expected = 8_000 * 0.6 = 4_800; 1.5× = 7_200
+    const client = makeClient({ arc_stage: 'rising', stats: makeClientStats({ morale: 50 }) });
+    const entityContract = makeContract({
+      tier: 'client_entity', client_id: client.id, payout_type: 'per_month', amount: 7_500, // > 7_200
+    });
+    const state = makeRunState({ roster: [client], contracts: [entityContract] });
+
+    const result = applyContractSatisfaction(state, makeManifest());
+
+    // incomeComponent = +2 (exceeds 1.5× scaled threshold), fanComponent = 0 → delta = +2
+    expect(result.roster[0].stats.morale.true_value).toBe(52);
+  });
+
+  it('returns state unchanged when roster is empty', () => {
+    const state = makeRunState({ roster: [] });
+    const result = applyContractSatisfaction(state, makeManifest());
+    expect(result).toBe(state);
   });
 });

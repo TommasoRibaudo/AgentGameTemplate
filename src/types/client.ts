@@ -1,4 +1,5 @@
 import { ArcStage, CoreStatKey, StatDeltas } from './primitives';
+import { CampaignHistoryItem, CatalogRelease } from './campaign';
 
 // The engine holds the true value; the player only ever sees [observed_min, observed_max].
 // observed_min/max are derived — recomputed whenever scouting_invested, agent skills, or
@@ -30,15 +31,23 @@ export interface Client {
   id: string;
   name: string;
   arc_stage: ArcStage;
+  audience: number;
   stats: ClientStats;
   traits: AppliedTrait[];
+  // fixed hidden ceiling (0–100) set at prospect generation; talent grows toward this, never shown directly
+  max_potential: number;
   // turns spent on your roster — longer tenure narrows fog independently of scouting spend
   turns_on_roster: number;
   // turns spent at the current arc stage — drives arc progression evaluation
   turns_at_stage: number;
   active_campaign_id: string | null;
+  campaign_history: CampaignHistoryItem[];
+  catalog_releases: CatalogRelease[];
   // the agent<->client contract currently in force; null if unsigned or released
   agent_contract_id: string | null;
+  // counts how many times each decision option was chosen for this client;
+  // key is "templateKey:optionKey" — used to check decision_trigger trait conditions
+  decision_option_counts: Record<string, number>;
 }
 
 // Lightweight prospect record before signing — stats are maximally fogged
@@ -46,6 +55,8 @@ export interface Prospect {
   id: string;
   name: string;
   arc_stage: ArcStage;
+  audience: number;
   stats: ClientStats;
   scouting_invested: number;    // total spend so far narrowing this prospect's fog
+  max_potential: number;        // carried over to Client on signing
 }

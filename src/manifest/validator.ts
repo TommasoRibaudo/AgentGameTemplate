@@ -19,6 +19,22 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+function checkCampaignTypeKeys(
+  ownerLabel: string,
+  keys: unknown,
+  campaignTypeKeys: Set<string>,
+): void {
+  if (keys === undefined) return;
+  check(Array.isArray(keys), `${ownerLabel} campaign_type_keys must be an array when provided`);
+  for (const key of keys as unknown[]) {
+    check(typeof key === 'string', `${ownerLabel} campaign_type_keys entries must be strings`);
+    check(
+      campaignTypeKeys.has(key),
+      `${ownerLabel} references unknown campaign_type_key "${key}"`,
+    );
+  }
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export function validateManifest(raw: unknown): VariantManifest {
@@ -80,9 +96,17 @@ export function validateManifest(raw: unknown): VariantManifest {
 
   // ── Campaign types
   check(Array.isArray(raw.campaign_types), 'manifest.campaign_types must be an array');
+  const campaignTypeKeys = new Set<string>();
   for (const ct of raw.campaign_types as unknown[]) {
     check(isObject(ct), 'Each campaign_type must be an object');
     check(typeof ct.key === 'string', 'campaign_type.key must be a string');
+    campaignTypeKeys.add(ct.key);
+    if (ct.release_kind !== undefined) {
+      check(
+        ct.release_kind === 'album' || ct.release_kind === 'single',
+        `campaign_type "${ct.key}" release_kind must be "album" or "single" when provided`,
+      );
+    }
     check(
       typeof ct.total_turns === 'number' && (ct.total_turns as number) > 0,
       `campaign_type "${ct.key}" total_turns must be > 0`,
@@ -119,6 +143,7 @@ export function validateManifest(raw: unknown): VariantManifest {
     check(typeof ev.category             === 'string', `event "${ev.key}" category must be a string`);
     check(typeof ev.severity             === 'string', `event "${ev.key}" severity must be a string`);
     check(typeof ev.description_template === 'string', `event "${ev.key}" description_template must be a string`);
+    checkCampaignTypeKeys(`event "${ev.key}"`, ev.campaign_type_keys, campaignTypeKeys);
     check(Array.isArray(ev.options),                   `event "${ev.key}" options must be an array`);
     for (const opt of ev.options as unknown[]) {
       check(isObject(opt), `event "${ev.key}" each option must be an object`);
@@ -165,6 +190,7 @@ export function validateManifest(raw: unknown): VariantManifest {
     check(typeof bit.key                  === 'string', 'board_item_template.key must be a string');
     check(typeof bit.type                 === 'string', `board_item_template "${bit.key}" type must be a string`);
     check(typeof bit.description_template === 'string', `board_item_template "${bit.key}" description_template must be a string`);
+    checkCampaignTypeKeys(`board_item_template "${bit.key}"`, bit.campaign_type_keys, campaignTypeKeys);
     check(typeof bit.rep_gate             === 'number', `board_item_template "${bit.key}" rep_gate must be a number`);
     check(Array.isArray(bit.valid_arc_stages),          `board_item_template "${bit.key}" valid_arc_stages must be an array`);
     if (bit.contract_template_key !== null) {
@@ -196,6 +222,10 @@ export function validateManifest(raw: unknown): VariantManifest {
   check(isObject(econ.agent_stat_upgrade_cost),   'economy.agent_stat_upgrade_cost must be an object');
   check(isObject(econ.roster_slot_upgrade_cost),  'economy.roster_slot_upgrade_cost must be an object');
   check(isObject(econ.defense_track_upgrade_cost),'economy.defense_track_upgrade_cost must be an object');
+  check(
+    typeof econ.income_satisfaction_threshold === 'number' && (econ.income_satisfaction_threshold as number) > 0,
+    'economy.income_satisfaction_threshold must be > 0',
+  );
 
   // ── Arc config — all multipliers must be > 0
   check(isObject(raw.arc), 'manifest.arc must be an object');

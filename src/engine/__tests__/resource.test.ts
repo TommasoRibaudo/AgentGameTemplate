@@ -169,6 +169,24 @@ describe('resource — settleObjectivePayouts', () => {
     expect(result.contracts[0].objectives[0].is_paid).toBe(true);
   });
 
+  it('pays only the agency cut for client-entity objectives', () => {
+    const clientId = nextId();
+    const agentContractId = nextId();
+    const client = makeClient({ id: clientId, agent_contract_id: agentContractId });
+    const agentContract = makeContract({
+      id: agentContractId, tier: 'agent_client', client_id: clientId,
+      your_cut: 20, amount: 0,
+    });
+    const obj = makeObjective({ payout: 5000, is_met: true, is_paid: false });
+    const entityContract = makeContract({
+      tier: 'client_entity', client_id: clientId, entity_id: nextId(),
+      payout_type: 'per_objective', your_cut: null, objectives: [obj],
+    });
+    const state = makeRunState({ money: 1000, roster: [client], contracts: [agentContract, entityContract] });
+    const { state: result } = settleObjectivePayouts(state, makeManifest());
+    expect(result.money).toBe(2000);
+  });
+
   it('does not double-pay already-paid objectives', () => {
     const obj = makeObjective({ payout: 5000, is_met: true, is_paid: true });
     const contract = makeContract({ payout_type: 'per_objective', objectives: [obj] });
@@ -295,6 +313,19 @@ describe('resource — estimateClientAssetValue', () => {
     const state = makeRunState({ roster: [client], contracts: [agentContract, entityContract] });
     const value = estimateClientAssetValue(state, clientId, makeManifest());
     expect(value).toBeGreaterThan(0);
+  });
+
+  it('values the same contract higher for clients with more fans', () => {
+    const lowClientId = nextId();
+    const highClientId = nextId();
+    const lowClient = makeClient({ id: lowClientId, audience: 1_000 });
+    const highClient = makeClient({ id: highClientId, audience: 1_000_000 });
+    const lowContract = makeContract({ tier: 'client_entity', client_id: lowClientId, payout_type: 'per_month', amount: 10_000, duration_remaining: 6 });
+    const highContract = makeContract({ tier: 'client_entity', client_id: highClientId, payout_type: 'per_month', amount: 10_000, duration_remaining: 6 });
+    const manifest = makeManifest();
+    const lowValue = estimateClientAssetValue(makeRunState({ roster: [lowClient], contracts: [lowContract] }), lowClientId, manifest);
+    const highValue = estimateClientAssetValue(makeRunState({ roster: [highClient], contracts: [highContract] }), highClientId, manifest);
+    expect(highValue).toBeGreaterThan(lowValue);
   });
 
   it('estimates value from a lump_sum entity contract', () => {

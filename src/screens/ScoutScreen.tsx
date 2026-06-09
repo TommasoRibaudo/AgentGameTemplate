@@ -8,10 +8,12 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ScoutStackParamList } from '../navigation/types';
 import {
   useRunState, useManifest, useProspects,
-  useMoney, useReputation, useTurnNumber, useRunStore, useAgentState,
+  useMoney, useReputation, useTurnNumber, useRunStore,
 } from '../store/useRunStore';
 import { TopBar }   from '../components/TopBar';
 import { FogBand }  from '../components/FogBand';
+import { canInvestScouting } from '../engine/client';
+import { AgentState } from '../types/agent';
 import { Prospect } from '../types/client';
 import { CoreStatKey } from '../types/primitives';
 import { Colors, FontSize, Spacing, Radius, ArcColors, formatMoney } from '../theme';
@@ -90,7 +92,9 @@ export function ScoutScreen() {
         renderItem={({ item }) => (
           <ProspectCard
             prospect={item}
+            agent={runState.agent}
             statLabels={statLabels}
+            audienceLabel={labels.audience}
             canInvest={canAfford}
             canSign={!rosterFull}
             onInvest={handleInvest}
@@ -105,7 +109,9 @@ export function ScoutScreen() {
 
 interface ProspectCardProps {
   prospect: Prospect;
+  agent: AgentState;
   statLabels: Record<CoreStatKey, string>;
+  audienceLabel: string;
   canInvest: boolean;
   canSign: boolean;
   onInvest: (id: string, key: CoreStatKey) => void;
@@ -113,9 +119,11 @@ interface ProspectCardProps {
   onViewDetail: () => void;
 }
 
-function ProspectCard({ prospect, statLabels, canInvest, canSign, onInvest, onSign, onViewDetail }: ProspectCardProps) {
+function ProspectCard({ prospect, agent, statLabels, audienceLabel, canInvest, canSign, onInvest, onSign, onViewDetail }: ProspectCardProps) {
   const arcColor = ArcColors[prospect.arc_stage] ?? Colors.textSecondary;
   const keys: CoreStatKey[] = ['talent', 'form', 'marketability', 'morale'];
+  const scoutMaxed = !canInvestScouting(prospect, 'talent', 500, agent);
+  const scoutDisabled = !canInvest || scoutMaxed;
 
   return (
     <View style={styles.card}>
@@ -129,6 +137,10 @@ function ProspectCard({ prospect, statLabels, canInvest, canSign, onInvest, onSi
       </View>
 
       <View style={styles.statGrid}>
+        <View style={styles.audienceRow}>
+          <Text style={styles.audienceLabel}>{audienceLabel}</Text>
+          <Text style={styles.audienceValue}>{prospect.audience.toLocaleString()}</Text>
+        </View>
         {keys.map(key => (
           <View key={key} style={styles.statWrap}>
             <FogBand label={statLabels[key]} stat={prospect.stats[key]} size="compact" />
@@ -150,14 +162,14 @@ function ProspectCard({ prospect, statLabels, canInvest, canSign, onInvest, onSi
           <Text style={styles.btnText}>Details</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.investBtn, !canInvest && styles.btnDisabled]}
+          style={[styles.investBtn, scoutDisabled && styles.btnDisabled]}
           onPress={() => onInvest(prospect.id, 'talent')}
-          disabled={!canInvest}
+          disabled={scoutDisabled}
           accessibilityRole="button"
           accessibilityLabel={`Scout ${prospect.name} for $500`}
         >
-          <Text style={[styles.btnText, !canInvest && styles.btnTextDim]}>
-            Scout ($500)
+          <Text style={[styles.btnText, scoutDisabled && styles.btnTextDim]}>
+            {scoutMaxed ? 'Max' : 'Scout ($500)'}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -217,6 +229,9 @@ const styles = StyleSheet.create({
   },
   arcText: { fontSize: 9, fontWeight: '700', letterSpacing: 0.5 },
   statGrid: { gap: Spacing.xs },
+  audienceRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  audienceLabel: { color: Colors.textDim, fontSize: FontSize.xs, textTransform: 'uppercase' },
+  audienceValue: { color: Colors.textSecondary, fontSize: FontSize.xs, fontWeight: '600' },
   statWrap: {},
   invested: { color: Colors.textDim, fontSize: FontSize.xs },
   actions: { flexDirection: 'row', gap: Spacing.sm },

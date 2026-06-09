@@ -66,10 +66,12 @@ function RunNavigator() {
         ),
       })}
     >
-      <Tab.Screen name="Home"   component={HomeScreen} />
+      <Tab.Screen name="Home" component={HomeScreen}
+        options={{ headerShown: true, title: 'Home', ...headerOpts }} />
       <Tab.Screen name="Roster" component={RosterNavigator} />
       <Tab.Screen name="Scout"  component={ScoutNavigator} />
-      <Tab.Screen name="Agency" component={AgencyScreen} />
+      <Tab.Screen name="Agency" component={AgencyScreen}
+        options={{ headerShown: true, title: 'Agency', ...headerOpts }} />
     </Tab.Navigator>
   );
 }
@@ -78,9 +80,9 @@ function RunNavigator() {
 // Run-ended navigation is handled inside HomeScreen (always mounted while a run
 // is active), which has access to rootNav via useNavigation().
 
-export function AppNavigator() {
+export function AppNavigator({ initialRoute = 'NewCareer' }: { initialRoute?: keyof RootParamList }) {
   return (
-    <Root.Navigator screenOptions={{ ...stackOpts, headerShown: false }} initialRouteName="NewCareer">
+    <Root.Navigator screenOptions={{ ...stackOpts, headerShown: false }} initialRouteName={initialRoute}>
       <Root.Screen name="NewCareer"     component={NewCareerScreen} />
       <Root.Screen name="Run"           component={RunNavigator} />
       <Root.Screen name="CareerSummary" component={CareerSummaryScreen}

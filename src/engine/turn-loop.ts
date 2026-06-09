@@ -1,12 +1,13 @@
 import { RunState, NewsItem, NewsItemType } from '../types/run';
 import { TurnPhase } from '../types/primitives';
 import { VariantManifest } from '../types/manifest';
-import { computeMonthlyIncome, computeMonthlyExpenses, applyMoneyDelta, applyReputationDelta, settleObjectivePayouts, evaluateObjectiveConditions } from './resource';
-import { refreshClientFog, evaluateArcProgression, generateProspects } from './client';
-import { advanceCampaigns } from './campaign';
+import { computeMonthlyIncome, computeMonthlyExpenses, applyMoneyDelta, applyReputationDelta, settleObjectivePayouts, evaluateObjectiveConditions, computeAgencyPayout } from './resource';
+import { refreshClientFog, evaluateArcProgression, generateProspects, computeProspectPoolSize, applyTalentGrowthDecay } from './client';
+import { advanceCampaigns, collectCatalogIncome } from './campaign';
 import { generateEvents, applyEventDefaults } from './event';
 import { generateDecisionBoard, applyBoardDefaults, tickBoardItemExpiry } from './decision-queue';
 import { serviceDebt, checkFailureCondition, openDebtState, fireLowMoneyWarning } from './failure';
+import { applyBuildingDevelopment, applyContractSatisfaction } from './progression';
 
 // INVARIANTS (PRD §2.1):
 // - Phase order is fixed and must not be skipped.
@@ -88,21 +89,79 @@ export const runUpkeep: PhaseRunner = (state, manifest) => {
 
   // 4. Service debt repayment
   if (s.debt.is_active) {
+    const beforeDebt = s.debt;
+    const beforeMoney = s.money;
     s = serviceDebt(s, manifest);
+    const paid = beforeMoney - s.money;
+    const missedPayment = beforeDebt.bankruptcy_warning_turns_remaining !== s.debt.bankruptcy_warning_turns_remaining
+      && s.debt.bankruptcy_warning_turns_remaining !== null
+      && paid === 0;
+
+    if (paid > 0) {
+      news.push(makeNews(s, 'debt_repayment', `Debt repayment: -$${paid.toLocaleString()}`, -paid));
+    }
+    if (beforeDebt.bankruptcy_warning_turns_remaining !== null && s.debt.bankruptcy_warning_turns_remaining === null) {
+      news.push(makeNews(s, 'debt_recovered', 'Debt account returned to good standing'));
+    }
+    if (missedPayment) {
+      const turnsLeft = s.debt.bankruptcy_warning_turns_remaining ?? 0;
+      news.push(makeNews(s, 'debt_missed', `Debt repayment missed. Grace turns remaining: ${turnsLeft}`));
+    }
   }
 
   // 5. Open debt state if money dropped to 0 or below
   if (s.money <= 0 && !s.debt.is_active) {
     s = openDebtState(s, manifest);
+    news.push(makeNews(s, 'debt_opened', `Debt account opened. Credit ceiling: $${s.debt.credit_ceiling.toLocaleString()}`));
   }
 
   // 6. Fire low-money warning immediately if triggered
   s = fireLowMoneyWarning(s);
 
   // 7. Advance campaigns (one installment per campaign)
+  const campaignsBefore = s.campaigns;
   s = advanceCampaigns(s, manifest);
+  for (const campaign of s.campaigns) {
+    const prior = campaignsBefore.find(c => c.id === campaign.id);
+    if (!prior) continue;
+    const newResults = campaign.installment_results.slice(prior.installment_results.length);
+    const client = s.roster.find(c => c.id === campaign.client_id);
+    for (const result of newResults) {
+      const campaignType = manifest.campaign_types.find(t => t.key === campaign.type_key);
+      const campaignLabel = campaignType?.label ?? campaign.type_key.replace(/_/g, ' ');
+      const clientName = client?.name ?? 'Client';
+      const isRelease = campaignType?.release_kind != null;
+      news.push(makeNews(
+        s,
+        'campaign_installment',
+        `${clientName}: ${campaignLabel} installment (${result.outcome_key.replace(/_/g, ' ')})`,
+        isRelease ? null : result.money_delta,
+        result.reputation_delta,
+        campaign.client_id,
+      ));
+    }
+  }
 
-  // 8. Evaluate arc stage progression for all clients
+  const catalog = collectCatalogIncome(s);
+  s = catalog.state;
+  if (catalog.income > 0 || catalog.fanGain > 0) {
+    news.push(makeNews(
+      s,
+      'income_received',
+      `Catalog royalties: +$${catalog.income.toLocaleString()} and ${catalog.fanGain.toLocaleString()} new fans`,
+      catalog.income,
+      null,
+      null,
+    ));
+  }
+
+  // 8. Building development improves roster stats over time before fog refresh.
+  s = applyBuildingDevelopment(s);
+
+  // 8a. Contract satisfaction shifts morale based on earnings and fan growth.
+  s = applyContractSatisfaction(s, manifest);
+
+  // 9. Evaluate arc stage progression, apply talent growth/decay, refresh fog
   const updatedRoster = s.roster.map(client => {
     const newStage = evaluateArcProgression(client, manifest);
     const stageChanged = newStage !== client.arc_stage;
@@ -110,15 +169,15 @@ export const runUpkeep: PhaseRunner = (state, manifest) => {
       news.push(makeNews(s, 'client_milestone',
         `${client.name} has reached ${newStage}`, null, null, client.id));
     }
-    const newStats = refreshClientFog(client, s.agent);
-    return {
+    const staged = {
       ...client,
-      stats:         newStats,
-      arc_stage:     newStage,
+      arc_stage:       newStage,
       turns_on_roster: client.turns_on_roster + 1,
       turns_at_stage:  stageChanged ? 0 : client.turns_at_stage + 1,
-      clients_developed: undefined, // tracked on RunState, not client
     };
+    const withTalent = applyTalentGrowthDecay(staged, s.agent);
+    const newStats = refreshClientFog(withTalent, s.agent);
+    return { ...withTalent, stats: newStats };
   });
 
   // Track clients_developed (those who reached Peak this turn)
@@ -138,8 +197,6 @@ export const runUpkeep: PhaseRunner = (state, manifest) => {
 
 // ─── Phase 3: Decision setup ──────────────────────────────────────────────────
 
-const MAX_PROSPECTS = 6;
-
 export const runDecisionPhase: PhaseRunner = (state, manifest) => {
   assertPhase(state, 'decision');
 
@@ -147,12 +204,13 @@ export const runDecisionPhase: PhaseRunner = (state, manifest) => {
   let s = tickBoardItemExpiry(state);
 
   // Refresh prospect pool (add up to 2 new prospects per turn, cap at MAX_PROSPECTS)
-  if (s.prospects.length < MAX_PROSPECTS) {
+  const maxProspects = computeProspectPoolSize(s.reputation);
+  if (s.prospects.length < maxProspects) {
     const usedNames = new Set([
       ...s.roster.map(c => c.name),
       ...s.prospects.map(p => p.name),
     ]);
-    const fresh = generateProspects(Math.min(2, MAX_PROSPECTS - s.prospects.length), usedNames);
+    const fresh = generateProspects(Math.min(2, maxProspects - s.prospects.length), usedNames, s.reputation);
     s = { ...s, prospects: [...s.prospects, ...fresh] };
   }
 
@@ -187,10 +245,24 @@ export const runResolution: PhaseRunner = (state, manifest) => {
 
   // Evaluate objective conditions, then settle any newly-met payouts
   s = evaluateObjectiveConditions(s);
-  const { state: settled } = settleObjectivePayouts(s, manifest);
+  const { state: settled, settledContractIds } = settleObjectivePayouts(s, manifest);
   s = settled;
+  const payoutNews = settledContractIds.map(contractId => {
+    const contract = s.contracts.find(c => c.id === contractId);
+    const paidTotal = contract?.objectives
+      .filter(o => o.is_met && o.is_paid)
+      .reduce((sum, o) => sum + computeAgencyPayout(s, contract, o.payout), 0) ?? 0;
+    return makeNews(
+      s,
+      'income_received',
+      'Contract objective payout settled',
+      paidTotal,
+      null,
+      contract?.client_id ?? null,
+    );
+  });
 
-  return { state: { ...s, phase: 'turn_close' }, news: [] };
+  return { state: { ...s, phase: 'turn_close', news_feed: [...s.news_feed, ...payoutNews] }, news: payoutNews };
 };
 
 // ─── Phase 5: Turn Close ──────────────────────────────────────────────────────

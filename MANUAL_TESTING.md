@@ -103,16 +103,16 @@ This may require spending aggressively or running several turns without income.
 
 1. Spend or advance until money reaches 0. PASSED
 2. Confirm the low-money warning appears. NOT PASSED DOES NOT SHOW UP
-3. Confirm the debt state opens.
-4. Go to Agency.
-5. Confirm the Bank panel shows debt balance, credit ceiling, and loan controls.
-6. Take a valid loan.
-7. Confirm money increases and debt balance increases.
-8. Advance turns and confirm repayments occur.
-9. If possible, recover by repaying debt and confirm debt state closes.
-10. If possible, force missed repayment with no credit headroom.
-11. Confirm a bankruptcy warning appears before the run ends.
-12. Confirm bankruptcy ends the run only after the grace period.
+3. Confirm the debt state opens. PASSED
+4. Go to Agency. PASSED
+5. Confirm the Bank panel shows debt balance, credit ceiling, and loan controls. NOT PASSED EVERYTHING SEEMS TO BE AT 0
+6. Take a valid loan. NOT PASSED CANNOT TAKE A LOAN
+7. Confirm money increases and debt balance increases. TAKING A LOAN DOES NOT INCREASE MONEY
+8. Advance turns and confirm repayments occur. CANNOT TEST
+9. If possible, recover by repaying debt and confirm debt state closes. CANNOT TEST
+10. If possible, force missed repayment with no credit headroom. CANNOT TESTS
+11. Confirm a bankruptcy warning appears before the run ends. DO NOT SEE IT EVEN AFTER ENDING THE TURN A BUNCH OF TIMES
+12. Confirm bankruptcy ends the run only after the grace period. CANNOT TEST
 
 Report:
 
@@ -123,32 +123,45 @@ Report:
 
 ## Campaigns And Traits
 
-1. Find or create a decision that starts a campaign.
-2. Approve it.
-3. Confirm the client shows an active campaign.
-4. Advance turns while the campaign is active.
-5. Confirm installment results appear in client campaign history or news.
-6. Confirm campaign stat deltas affect the client.
-7. Continue until the campaign closes.
-8. Confirm objectives settle and news is recorded.
-9. If a trait is granted, confirm it appears on the client and later rolls use its modifier.
+1. Sign a prospect and open that client from Roster.
+2. Open the Campaign tab.
+3. Confirm available campaigns show Start controls without needing a Home decision.
+4. Change campaign size between small, medium, and large.
+5. Confirm the projected budget, payout, fans, and event risk change.
+6. Change campaign length with the minus/plus buttons.
+7. Confirm the campaign budget changes with length.
+8. Lower or raise the campaign budget with the minus/plus buttons.
+9. If the budget is unaffordable, confirm Start is disabled and shows how much more money is needed.
+10. Start an affordable campaign.
+11. Confirm money immediately decreases by the selected campaign budget.
+12. Confirm the client shows an active campaign with size, budget, payout, and turns left.
+13. Advance turns while the campaign is active.
+14. Confirm installment results appear in client campaign history or news.
+15. Confirm campaign income appears in money changes/news when the campaign pays monthly.
+16. Confirm the client's fans/listeners/followers increase after campaign installments.
+17. Continue until the campaign closes.
+18. Confirm objectives settle and news is recorded if the campaign was linked to an objective.
+19. If a trait is granted, confirm it appears on the client and later rolls use its modifier.
 
+gains from a a campaign are not being shown in the monthly report (I make money and I dont know why as it says I should be losing money)
 Report:
 
 - Campaign type:
+- Campaign size/length/budget:
 - Completed on turn:
 - Payout/objectives correct:
+- Audience grew:
 - Trait grant observed:
 
 ## Events And Windfalls
 
-1. Advance several turns with at least one client on the roster.
-2. Confirm events appear at a reasonable frequency, usually 0 to 2 per turn.
-3. Resolve an event option.
-4. Confirm money, reputation, or client changes are applied.
-5. Dismiss or ignore an event once.
-6. Confirm the default outcome applies at turn end.
-7. If a windfall event appears, confirm it can inject a decision board item during the current Decision phase.
+1. Advance several turns with at least one client on the roster. PASSED
+2. Confirm events appear at a reasonable frequency, usually 0 to 2 per turn. PASSED
+3. Resolve an event option. PASSED
+4. Confirm money, reputation, or client changes are applied. PASSED
+5. Dismiss or ignore an event once. PASSED
+6. Confirm the default outcome applies at turn end. PASSED
+7. If a windfall event appears, confirm it can inject a decision board item during the current Decision phase. CANT SEE ANY
 
 Report:
 
@@ -158,13 +171,13 @@ Report:
 
 ## Retirement And End Screens
 
-1. During the Decision phase, go to Agency.
-2. Tap Retire.
-3. Confirm the retirement confirmation appears.
-4. Confirm retirement ends the run.
-5. Confirm Career Summary shows score and run outcome.
-6. Open Leaderboard, Achievements, and Legacy screens.
-7. Confirm the completed run appears where expected.
+1. During the Decision phase, go to Agency. PASSED
+2. Tap Retire. PASSED
+3. Confirm the retirement confirmation appears. PASSED
+4. Confirm retirement ends the run. PASSED
+5. Confirm Career Summary shows score and run outcome. PASSED
+6. Open Leaderboard, Achievements, and Legacy screens. PASSED
+7. Confirm the completed run appears where expected. PASSED
 
 Report:
 
@@ -176,25 +189,25 @@ Report:
 
 Use these notes to decide whether the placeholder values need changes.
 
-1. Career length: Does 60 turns feel like the right target, too short, or too long?
-2. Fog curve: Does scouting feel useful early? Does Talent correctly stay uncertain?
-3. Push risk: Are Push outcomes understandable and worth using?
-4. Exposure: At mid-game roster size, do events average around 0.5 per turn?
-5. Credit ceiling: Does available credit feel fair based on reputation and roster value?
-6. Career score: Does the final score reward the run's actual success?
-7. Economy: Are the first 3 turns tight but survivable?
-8. Progression: Do upgrades feel meaningful but achievable?
+1. Career length: Does 60 turns feel like the right target, too short, or too long? WAY TOO SHORT, NEEDS TO BE EVERY TURN IS A WEEK, YOU RETIRE AFTER 40 YEARS (YOU DO NOT SEE THIS LIMIT, ALSO THERE SHOULD BE EVENTS TIED TO THIS AS YOU APROACH OLD AGE: YOU FEEL TIRED, AND SOON PLAN TO RETIRE)
+2. Fog curve: Does scouting feel useful early? Does Talent correctly stay uncertain? THE FOG NEEDS TO BE MORE OBSCURE AT FIRST
+3. Push risk: Are Push outcomes understandable and worth using? NO IDEA WHAT YOU ARE TALKING ABOUT BUT THE DECISION I APPROVE HAVE NO VISIBLE OUTPUT
+4. Exposure: At mid-game roster size, do events average around 0.5 per turn? THERE ARE A LOT OF EVENTS AND I JUST STARTED
+5. Credit ceiling: Does available credit feel fair based on reputation and roster value? BANK DOES NOT WORK
+6. Career score: Does the final score reward the run's actual success? COULD BE 
+7. Economy: Are the first 3 turns tight but survivable? NO YOU JUST MAKE MEGA DOUGH
+8. Progression: Do upgrades feel meaningful but achievable? EVERYTHING MOVES VERY FAST
 
 ## Final Report Template
 
-- Platform:
-- App started cleanly:
-- Automated tests passed before manual test:
-- TypeScript passed before manual test:
-- Number of turns played:
-- Major blockers:
+- Platform: IOS EXPO GO
+- App started cleanly: YES
+- Automated tests passed before manual test: YES
+- TypeScript passed before manual test: YES
+- Number of turns played: A COUPLE OF MATCHES FOR 20 TURNS
+- Major blockers: I IMMEDIATELY STARTED MAKING SERIOUS DOUGH BECAUSE I HAD PEOPLE WITH FOUR LABELS CONTRACTS LOL
 - Minor bugs:
-- Confusing UX:
-- Economy/tuning notes:
+- Confusing UX: CONTRACTS ARE NOT CLEAR AT ALL
+- Economy/tuning notes: EVERYTHING HAPPENS TOO QUICKLY, NO INITIAL STRUGGLE
 - Screenshots or videos captured:
-- Recommended next fixes:
+- Recommended next fixes: CHECK AgentGameTemplate\Improvements.md

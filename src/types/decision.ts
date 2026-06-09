@@ -10,6 +10,17 @@ export interface DecisionOutcome {
   activates_contract_id: string | null;
 }
 
+export interface RandomDecisionOutcome {
+  key: string;
+  label: string;
+  description: string;
+  chance: number;
+  outcome: DecisionOutcome;
+  // Positive values make this branch more likely below 50 marketability and
+  // less likely above 50 marketability for the decision's client.
+  marketability_modifier: number;
+}
+
 // Push carries real downside risk — a failed push can worsen terms or make the
 // counterparty withdraw. The risk curves are open question §6.3 in the PRD.
 export interface PushRisk {
@@ -23,6 +34,7 @@ export interface DecisionOption {
   key: 'approve' | 'reject' | 'push' | string;
   label: string;
   outcome: DecisionOutcome;
+  random_outcomes?: RandomDecisionOutcome[];
   // only present on the 'push' option
   push_risk: PushRisk | null;
 }
@@ -32,6 +44,8 @@ export interface DecisionItem {
   type: DecisionItemType;
   // references variant manifest board item template
   template_key: string;
+  // set when the item was generated from or gated by an active campaign
+  campaign_id?: string | null;
   client_id: string | null;
   // set when item involves an existing active contract (renewals, expiry pressure)
   contract_id: string | null;
@@ -46,4 +60,7 @@ export interface DecisionItem {
   expires_in: number | null;
   is_resolved: boolean;
   chosen_option_key: string | null;
+  resolved_outcome?: DecisionOutcome | null;
+  resolved_result_label?: string | null;
+  resolved_result_description?: string | null;
 }

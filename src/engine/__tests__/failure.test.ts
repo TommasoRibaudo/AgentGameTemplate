@@ -1,5 +1,6 @@
 import {
   computeCreditCeiling,
+  computeCreditHeadroom,
   openDebtState,
   serviceDebt,
   checkFailureCondition,
@@ -19,6 +20,12 @@ describe('failure — computeCreditCeiling', () => {
     expect(ceiling).toBe(Math.round(60 * manifest.economy.credit_ceiling_rep_weight));
   });
 
+  it('rounds credit ceiling to the displayed thousand bucket', () => {
+    const manifest = makeManifest();
+    const state = makeRunState({ reputation: 51 });
+    expect(computeCreditCeiling(state, manifest)).toBe(3_000);
+  });
+
   it('increases when clients have entity contracts', () => {
     const manifest = makeManifest();
     const clientId = nextId();
@@ -33,6 +40,15 @@ describe('failure — computeCreditCeiling', () => {
       contracts: [agentContract, entityContract],
     });
     expect(computeCreditCeiling(stateWithClient, manifest)).toBeGreaterThan(computeCreditCeiling(stateEmpty, manifest));
+  });
+
+  it('rounds available credit to the displayed thousand bucket', () => {
+    const manifest = makeManifest();
+    const state = makeRunState({
+      reputation: 100,
+      debt: makeDebtState({ is_active: true, balance: 2_500 }),
+    });
+    expect(computeCreditHeadroom(state, manifest)).toBe(3_000);
   });
 });
 
@@ -76,6 +92,18 @@ describe('failure — takeLoan', () => {
     expect(result.money).toBe(0);
   });
 
+  it('allows a loan equal to rounded displayed credit headroom', () => {
+    const manifest = makeManifest();
+    const state = makeRunState({
+      money: 0,
+      reputation: 100,
+      debt: makeDebtState({ is_active: true, balance: 2_500 }),
+    });
+    const result = takeLoan(state, 3_000, manifest);
+    expect(result.money).toBe(3_000);
+    expect(result.debt.balance).toBe(5_500);
+  });
+
   it('does nothing for amount <= 0', () => {
     const state = makeRunState({ reputation: 80 });
     const result = takeLoan(state, 0, makeManifest());
@@ -95,7 +123,8 @@ describe('failure — serviceDebt', () => {
     });
     const result = serviceDebt(state, manifest);
     expect(result.money).toBe(4_800);
-    expect(result.debt.balance).toBe(1_800);
+    expect(result.debt.balance).toBe(1_890);
+    expect(result.debt.per_turn_repayment).toBe(95);
   });
 
   it('closes debt when balance reaches 0', () => {
@@ -106,6 +135,19 @@ describe('failure — serviceDebt', () => {
     });
     const result = serviceDebt(state, manifest);
     expect(result.debt.is_active).toBe(false);
+  });
+
+  it('sets bankruptcy_warning when cannot repay even with credit headroom', () => {
+    const manifest = makeManifest();
+    const state = makeRunState({
+      money: 0,
+      reputation: 80,
+      debt: makeDebtState({ is_active: true, balance: 1_000, per_turn_repayment: 500, credit_ceiling: 4_000 }),
+    });
+    const result = serviceDebt(state, manifest);
+    expect(result.debt.bankruptcy_warning_turns_remaining).toBe(1);
+    expect(result.debt.balance).toBe(1_000);
+    expect(result.money).toBe(0);
   });
 
   it('sets bankruptcy_warning when cannot repay and no headroom', () => {
@@ -198,6 +240,11 @@ describe('failure — computeCareerScore', () => {
     const score = computeCareerScore(state);
     const expected = 70 * 100 + Math.round(100_000 / 100) + 3 * 500;
     expect(score).toBe(expected);
+  });
+
+  it('adds a fan-base score component', () => {
+    const state = makeRunState({ peak_reputation: 0, total_earnings: 0, clients_developed: 0, roster: [makeClient({ audience: 25_000 })] });
+    expect(computeCareerScore(state)).toBe(250);
   });
 
   it('returns 0 for a blank run', () => {

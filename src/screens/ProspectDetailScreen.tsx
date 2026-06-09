@@ -10,6 +10,7 @@ import {
 } from '../store/useRunStore';
 import { TopBar }  from '../components/TopBar';
 import { FogBand } from '../components/FogBand';
+import { canInvestScouting } from '../engine/client';
 import { CoreStatKey } from '../types/primitives';
 import { Colors, FontSize, Spacing, Radius, ArcColors } from '../theme';
 
@@ -100,6 +101,10 @@ export function ProspectDetailScreen({ route, navigation }: ProspectDetailScreen
         {/* ── Scouting progress ──────────────────────────────────────────── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Scouting Progress</Text>
+          <View style={styles.audienceRow}>
+            <Text style={styles.audienceLabel}>{labels.audience}</Text>
+            <Text style={styles.audienceValue}>{prospect.audience.toLocaleString()}</Text>
+          </View>
           <View style={styles.progressBar}>
             <View style={[styles.progressFill, { width: `${fogPct}%` as any }]} />
           </View>
@@ -110,22 +115,26 @@ export function ProspectDetailScreen({ route, navigation }: ProspectDetailScreen
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Stats</Text>
           <View style={styles.statsGrid}>
-            {keys.map(key => (
-              <View key={key} style={styles.statRow}>
-                <FogBand label={statLabels[key]} stat={prospect.stats[key]} size="compact" />
-                <TouchableOpacity
-                  style={[styles.scoutBtn, !canAfford && styles.btnDisabled]}
-                  onPress={() => handleInvest(key)}
-                  disabled={!canAfford}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Scout ${statLabels[key]} for ${SCOUT_COST}`}
-                >
-                  <Text style={[styles.scoutBtnText, !canAfford && styles.textDim]}>
-                    Scout
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ))}
+            {keys.map(key => {
+              const scoutMaxed = !canInvestScouting(prospect, key, SCOUT_COST, runState.agent);
+              const scoutDisabled = !canAfford || scoutMaxed;
+              return (
+                <View key={key} style={styles.statRow}>
+                  <FogBand label={statLabels[key]} stat={prospect.stats[key]} size="compact" />
+                  <TouchableOpacity
+                    style={[styles.scoutBtn, scoutDisabled && styles.btnDisabled]}
+                    onPress={() => handleInvest(key)}
+                    disabled={scoutDisabled}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Scout ${statLabels[key]} for ${SCOUT_COST}`}
+                  >
+                    <Text style={[styles.scoutBtnText, scoutDisabled && styles.textDim]}>
+                      {scoutMaxed ? 'Max' : 'Scout'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
           </View>
           {!canAfford && (
             <Text style={styles.cantAfford}>Need ${SCOUT_COST.toLocaleString()} to invest.</Text>
@@ -211,6 +220,9 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
   progressLabel: { color: Colors.textDim, fontSize: FontSize.xs },
+  audienceRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  audienceLabel: { color: Colors.textDim, fontSize: FontSize.xs, textTransform: 'uppercase' },
+  audienceValue: { color: Colors.textSecondary, fontSize: FontSize.xs, fontWeight: '600' },
 
   statsGrid: { gap: Spacing.sm },
   statRow: {

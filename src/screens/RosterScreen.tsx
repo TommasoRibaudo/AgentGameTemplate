@@ -72,6 +72,7 @@ export function RosterScreen() {
             client={item}
             talentLabel={labels.stat_labels.talent}
             formLabel={labels.stat_labels.form}
+            audienceLabel={labels.audience}
             hasCampaign={hasActiveCampaign(item.id)}
             contractStatus={contractStatus(item.id)}
             onPress={id => nav.navigate('ClientDetail', { clientId: id })}

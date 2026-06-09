@@ -1,5 +1,5 @@
 import { useRunStore } from '../useRunStore';
-import { makeManifest, makeRunState } from '../../engine/__tests__/fixtures';
+import { makeClient, makeClientStats, makeManifest, makeRunState } from '../../engine/__tests__/fixtures';
 
 // Reset the Zustand store before each test so tests are isolated
 beforeEach(() => {
@@ -92,6 +92,89 @@ describe('useRunStore — upgradeAgentStat', () => {
     useRunStore.getState().loadExistingRun(makeRunState({ money: 0, reputation: 0 }), manifest);
     useRunStore.getState().upgradeAgentStat('operations');
     expect(useRunStore.getState().state!.agent.stats.operations).toBe(0);
+  });
+});
+
+describe('useRunStore — investScouting', () => {
+  it('deducts money when scouting a prospect', () => {
+    const prospect = {
+      id: 'prospect_1',
+      name: 'Prospect One',
+      arc_stage: 'rising' as const,
+      audience: 5_000,
+      stats: makeClientStats(),
+      scouting_invested: 0,
+      max_potential: 80,
+    };
+    useRunStore.getState().loadExistingRun(
+      makeRunState({ money: 1_000, prospects: [prospect] }),
+      manifest,
+    );
+
+    useRunStore.getState().investScouting('prospect_1', 'talent', 500);
+
+    const state = useRunStore.getState().state!;
+    expect(state.money).toBe(500);
+    expect(state.prospects[0].stats.talent.scouting_invested).toBe(500);
+    expect(state.prospects[0].scouting_invested).toBe(500);
+  });
+
+  it('does not scout when money is insufficient', () => {
+    const prospect = {
+      id: 'prospect_1',
+      name: 'Prospect One',
+      arc_stage: 'rising' as const,
+      audience: 5_000,
+      stats: makeClientStats(),
+      scouting_invested: 0,
+      max_potential: 80,
+    };
+    useRunStore.getState().loadExistingRun(
+      makeRunState({ money: 100, prospects: [prospect] }),
+      manifest,
+    );
+
+    useRunStore.getState().investScouting('prospect_1', 'form', 500);
+
+    const state = useRunStore.getState().state!;
+    expect(state.money).toBe(100);
+    expect(state.prospects[0].stats.form.scouting_invested).toBe(0);
+    expect(state.prospects[0].scouting_invested).toBe(0);
+  });
+
+  it('does not charge money once scouting reaches the minimum fog window', () => {
+    const stats = makeClientStats({ talent: 60 });
+    const client = makeClient({
+      id: 'client_1',
+      turns_on_roster: 16,
+      stats: {
+        ...stats,
+        talent: {
+          ...stats.talent,
+          observed_min: 57,
+          observed_max: 63,
+          scouting_invested: 600,
+        },
+      },
+    });
+    useRunStore.getState().loadExistingRun(
+      makeRunState({
+        money: 1_000,
+        roster: [client],
+        agent: {
+          stats: { stat_scouting: 7, insight_scouting: 0, negotiation: 0, operations: 0, coaching: 0 },
+          roster_capacity: 5,
+          defense_tracks: [],
+        },
+      }),
+      manifest,
+    );
+
+    useRunStore.getState().investScouting('client_1', 'talent', 500);
+
+    const state = useRunStore.getState().state!;
+    expect(state.money).toBe(1_000);
+    expect(state.roster[0].stats.talent.scouting_invested).toBe(600);
   });
 });
 

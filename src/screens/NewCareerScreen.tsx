@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, TextInput } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootParamList } from '../navigation/types';
 import { useRunStore } from '../store/useRunStore';
@@ -23,10 +23,11 @@ const VARIANTS = [
 ];
 
 export function NewCareerScreen({ navigation }: Props) {
+  const [playerName, setPlayerName] = useState('');
   const startNewRun = useRunStore(s => s.startNewRun);
 
   function handleStart(idx: number) {
-    startNewRun(VARIANTS[idx].manifest);
+    startNewRun(VARIANTS[idx].manifest, playerName);
     (navigation as any).replace('Run');
   }
 
@@ -37,6 +38,16 @@ export function NewCareerScreen({ navigation }: Props) {
           <Text style={styles.title}>Agent Game</Text>
           <Text style={styles.subtitle}>Choose your career</Text>
         </View>
+
+        <TextInput
+          style={styles.nameInput}
+          value={playerName}
+          onChangeText={setPlayerName}
+          placeholder="Manager name"
+          placeholderTextColor={Colors.textDim}
+          autoCapitalize="words"
+          returnKeyType="done"
+        />
 
         <View style={styles.variants}>
           {VARIANTS.map((v, i) => (
@@ -102,6 +113,16 @@ const styles = StyleSheet.create({
   },
   variants: {
     gap: Spacing.md,
+  },
+  nameInput: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    color: Colors.textPrimary,
+    fontSize: FontSize.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.md,
   },
   variantCard: {
     backgroundColor: Colors.surface,

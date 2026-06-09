@@ -12,10 +12,13 @@ import {
   usePhase, useMoney, useReputation, useTurnNumber,
   useIsRunActive,
 } from '../store/useRunStore';
-import { TopBar }       from '../components/TopBar';
-import { DecisionCard } from '../components/DecisionCard';
-import { NewsItemRow }  from '../components/NewsItemRow';
-import { EventModal }   from '../components/EventModal';
+import { TopBar }             from '../components/TopBar';
+import { DecisionCard }       from '../components/DecisionCard';
+import { NewsItemRow }        from '../components/NewsItemRow';
+import { EventModal }         from '../components/EventModal';
+import { CounterOfferModal, CounterResult } from '../components/CounterOfferModal';
+import { ContractDraft }      from '../types/contract';
+import { getAgentCutPercent } from '../engine/resource';
 import { Colors, FontSize, Spacing, Radius } from '../theme';
 
 export function HomeScreen() {
@@ -33,11 +36,39 @@ export function HomeScreen() {
   const isActive  = useIsRunActive();
 
   const resolveDecision = useRunStore(s => s.resolveDecision);
+  const counterOffer    = useRunStore(s => s.counterOffer);
   const resolveEvent    = useRunStore(s => s.resolveEvent);
   const endTurn         = useRunStore(s => s.endTurn);
   const startTurn       = useRunStore(s => s.startTurn);
 
   const [feedExpanded, setFeedExpanded] = useState(false);
+  const [counterItemId, setCounterItemId]   = useState<string | null>(null);
+  const [counterDraft,  setCounterDraft]    = useState<ContractDraft | null>(null);
+  const [counterResult, setCounterResult]   = useState<CounterResult | null>(null);
+
+  function handleOpenCounter(itemId: string, draft: ContractDraft) {
+    setCounterItemId(itemId);
+    setCounterDraft(draft);
+    setCounterResult(null);
+  }
+
+  function handleCounterSubmit(counter: import('../types/contract').CounterTerms) {
+    if (!counterItemId) return;
+    const result = counterOffer(counterItemId, counter);
+    setCounterResult(result);
+  }
+
+  function handleCounterClose() {
+    setCounterItemId(null);
+    setCounterDraft(null);
+    setCounterResult(null);
+  }
+
+  useEffect(() => {
+    if (runState?.player_name) {
+      rootNav.setOptions({ title: runState.player_name });
+    }
+  }, [runState?.player_name]);
 
   // Navigate to CareerSummary whenever the run ends (covers all end paths:
   // clock expiry, bankruptcy, voluntary retire from AgencyScreen)
@@ -48,9 +79,12 @@ export function HomeScreen() {
     }
   }, [isActive]);
 
-  const handleStartTurn = useCallback(() => {
-    startTurn();
-  }, [startTurn]);
+  useEffect(() => {
+    const current = useRunStore.getState();
+    if (current.state?.is_active && current.state.phase === 'turn_open') {
+      current.startTurn();
+    }
+  }, [phase, isActive, startTurn]);
 
   const handleEndTurn = useCallback(() => {
     const unresolved = board.filter(i => !i.is_resolved);
@@ -78,7 +112,6 @@ export function HomeScreen() {
 
   const activeEvent  = events.find(e => !e.is_resolved) ?? null;
   const isDecision   = phase === 'decision';
-  const isTurnOpen   = phase === 'turn_open';
   const labels       = manifest.labels;
   const shownFeed    = feedExpanded ? feed : feed.slice(-5);
 
@@ -127,27 +160,31 @@ export function HomeScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Decision Board</Text>
 
-          {isTurnOpen && (
-            <TouchableOpacity style={styles.startBtn} onPress={handleStartTurn}>
-              <Text style={styles.startBtnText}>Start Turn {turnNum}</Text>
-            </TouchableOpacity>
-          )}
-
           {isDecision && board.length === 0 && (
             <Text style={styles.emptySection}>Board is clear.</Text>
           )}
 
-          {isDecision && board.map(item => (
-            <DecisionCard
-              key={item.id}
-              item={item}
-              clientName={clientName(item.client_id)}
-              clientLabel={labels.client}
-              entityLabel={labels.entity}
-              isPushEnabled={runState.agent.stats.negotiation > 0}
-              onResolve={resolveDecision}
-            />
-          ))}
+          {isDecision && board.map(item => {
+            const previousContract = (item.type === 'renewal' && item.contract_id)
+              ? runState.contracts.find(c => c.id === item.contract_id) ?? null
+              : null;
+            return (
+              <DecisionCard
+                key={item.id}
+                item={item}
+                clientName={clientName(item.client_id)}
+                clientLabel={labels.client}
+                entityLabel={labels.entity}
+                agentCutPercent={item.contract_draft?.tier === 'client_entity'
+                  ? getAgentCutPercent(runState, item.contract_draft.client_id)
+                  : null}
+                isPushEnabled={runState.agent.stats.negotiation > 0}
+                previousContract={previousContract}
+                onResolve={resolveDecision}
+                onOpenCounter={handleOpenCounter}
+              />
+            );
+          })}
         </View>
 
         {isDecision && (
@@ -165,6 +202,17 @@ export function HomeScreen() {
           clientName={clientName(activeEvent.client_id)}
           clientLabel={labels.client}
           onResolve={resolveEvent}
+        />
+      )}
+
+      {counterDraft && (
+        <CounterOfferModal
+          visible={counterItemId !== null}
+          draft={counterDraft}
+          negotiationLevel={runState.agent.stats.negotiation}
+          result={counterResult}
+          onSubmit={handleCounterSubmit}
+          onClose={handleCounterClose}
         />
       )}
     </SafeAreaView>
@@ -202,13 +250,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.bg,
   },
   emptyText: { color: Colors.textDim, fontSize: FontSize.md },
-  startBtn: {
-    backgroundColor: Colors.accent,
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-    alignItems: 'center',
-  },
-  startBtnText: { color: Colors.textPrimary, fontSize: FontSize.md, fontWeight: '700' },
   endTurnBtn: {
     backgroundColor: Colors.surfaceRaised,
     borderRadius: Radius.md,

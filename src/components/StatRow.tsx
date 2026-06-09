@@ -11,11 +11,13 @@ export interface StatRowProps {
   stat: FoggedStat;
   onInvest?: (statKey: CoreStatKey, amount: number) => void;
   canInvest?: boolean;
+  scoutMaxed?: boolean;
 }
 
 const INVEST_AMOUNT = 500;
 
-export function StatRow({ statKey, label, stat, onInvest, canInvest }: StatRowProps) {
+export function StatRow({ statKey, label, stat, onInvest, canInvest, scoutMaxed }: StatRowProps) {
+  const disabled = !canInvest || scoutMaxed;
   return (
     <View style={styles.row}>
       <View style={styles.band}>
@@ -23,15 +25,15 @@ export function StatRow({ statKey, label, stat, onInvest, canInvest }: StatRowPr
       </View>
       {onInvest && (
         <TouchableOpacity
-          style={[styles.btn, !canInvest && styles.btnDisabled]}
+          style={[styles.btn, disabled && styles.btnDisabled]}
           onPress={() => onInvest(statKey, INVEST_AMOUNT)}
-          disabled={!canInvest}
+          disabled={disabled}
           accessibilityLabel={`Invest ${INVEST_AMOUNT} in ${label}`}
         >
-          <Text style={[styles.btnText, !canInvest && styles.btnTextDisabled]}>
-            Invest
+          <Text style={[styles.btnText, disabled && styles.btnTextDisabled]}>
+            {scoutMaxed ? 'Max' : 'Invest'}
           </Text>
-          <Text style={[styles.btnSub, !canInvest && styles.btnTextDisabled]}>
+          <Text style={[styles.btnSub, disabled && styles.btnTextDisabled]}>
             ${INVEST_AMOUNT}
           </Text>
         </TouchableOpacity>

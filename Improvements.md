@@ -1,14 +1,62 @@
-1. you should choose the name of your character, that should be the title of home page. 
-2. agency tab does not have a title
-3. scouted players stat and amount of players avaiable should be tied to prestige (albeit still random)
-4. before first phase of scouting you should have more fog of stats 
-5. decision should show the result in the component itself and on the top bar (+$1000 and you actually see the difference in the top bar immediately)
-6. i should be able to invest in scouting the talent even from the details screen
-7. there is no counteroffer possibility when i sign a talent
-8. my cut is 1100% ? ahah 
-9. put a info small icon on each part of the contract that explains what the contract does
-10. events and decisions should also have % graduated results (if I deny a scandal, player marketeability should impact the possible positive outcome)
-11. events outcome should be news in the next turn
-12. turns should be shown as a date (start from january first of current year)
-13. you should as a agency invest in 1. a building that helps players improve the various stats, 2. invest in a single player to help him boost
-14. all the numerical values that decides how the game is played should be centralized so we can change it and create variants more easily
+# Improvements
+
+- [x] Choose the name of your character; use it as the Home page title.
+- [x] Agency tab needs a title.
+- [x] Scout prospect pool size and generated prospect quality should be tied to prestige/reputation, with randomness.
+- [x] Before first scouting, stats should have more fog.
+- [x] Decisions should show visible result hints in the component and update the top bar immediately after resolution.
+- [x] Scouting Talent should work from the prospect/client details screen.
+- [x] There is no counteroffer possibility when signing talent.
+- [x] Your cut showed as 1100%.
+- [x] Put a small info icon on each contract part explaining what it does.
+- [x] Events and decisions should have percentage/graduated results.
+- [x] Event outcomes should become news.
+- [x] Turns should be shown as a date starting from January 1 of the current year.
+- [x] Agency should invest in buildings that help clients improve stats, and in single-client boosts.
+- [ ] Centralize gameplay numerical values so variants are easier to tune.
+- [x] Events should be tied to campaigns.
+- [x] Talents should have campaign history, like albums/tours with stats.
+- [x] Talents should have fans/monthly listeners that grow.
+- [x] Fans should connect to marketability, events, campaigns, contracts, and scoring.
+- [x] Scouting should stop once the minimum fog window is reached.
+- [x] `{client_name}` appears in events and decisions instead of the actual name.
+- [x] Debt still needs a stricter failure/recovery loop and clearer debt events.
+- [x] Campaigns should have several options, such as tour size/length, affecting cost and result range.
+- [x] Clients should value their morale and relationship with you (am I happy with my current contract) based on how much money and fans they are getting
+- [x] campaign payouts and risks % should be hidden to the player.
+- [x] if the contract is between the talent and the company why are the sums involved the ones I gain? i get a cut
+- [x] album and single process rework (you create the album with songs names, and the results are felt after it completes)
+- [x] talent rework (max talent, growth towards that potential)
+- [~] over time, you get to know better your talent and the fog dissipates slowly. 
+- [~] happy clients want to renew their contract once it almost expires
+- [~] rework contracts, your counteroffer should be able to add other options (lump sum if not there) / also contract may come with exclusivity deals (label, sponsor) and objective (produce 2 albums, get this many fans)
+- [x] restrict events to 1 per turn at maximum, do not give the if dismissed option at all, they have to be responded
+- [x] does the output of each turn of the campaign impact the final result (like the album gets better if I get all average instead of all poor results?)?
+- [x] traits havent' been tested very well. artist should have starting traits
+- [x] saved progress does not save
+- [x] when talents ask to renew contracts from the decision, you should see the difference from your old contract, also it happens way to often (also contract length should be in weeks, months, years, not turns and they should be longer) 
+- [ ] there is a general expectation on how an artist should perform (he should always make a better album than his best). a poorly received campaign (one way below expectations), he looses fans. 
+- [ ] you should lose fans as time goes on, less in the rising phase, more in the decay phase. 
+- [ ] the game should burn slower at first, I can't be getting a million brand deals at the beginning with shit characters
+- [ ] Reposition and recolor the end turn button
+- [ ] remove native popup ui and make it custom
+- [ ] Remove invest to scout roster, you get a little boost of fog removed at signing and then you just wait for the natural fog dissipation
+- [ ] campaign size should be thematical to the campaign and variant
+- [ ] sticking to decisions gives traits (you always ignore scandals, your artist becomes Harder to suffer a scandal)
+- [ ] small album should have few songs 
+- [ ] when events fire it says +2 rep but not +2k (it only says 2k).
+- [ ] anchor artists to lower bar to check the campaign status (manually and automatically when they are doing a campaign)
+- [ ] getting + something means it's green, red for - numbers
+- [ ] getting a few sponsors is ok, doing it too much or with the wrong company can impact morale, and fanbase
+- [ ] some company are good sponsor, but pay less. bad press companies pay more but create more bad press for the artist. 
+- [ ] there should be way more streams compared to album sold.
+- [ ] rep is called clout but not everywhere, it needs to be consistent
+- [ ] when getting infrastructure, you need also to be able to remove it as it costs money
+- [ ] add tours campaign
+- [ ] decisions / events trees that lead to major events / decisions (good and bad)
+- [ ] make clear what the ranges mean while scouting (put the word estimate, show it with colors... idk really)
+- [ ] make the decisions and events happen less, as time goes on it's fine to have more decisions (the roster and rep will impact this)
+- [ ] calm down with all the offers for label and sponsor. getting the first sponsor should feel incredibel
+- [ ] add a new campaign: perform gigs. no upfront cost, little money and fans generation
+- [ ] the starting amount of listeners is terribly high. 
+- [ ] enforce exclusivity with old contracts and new and tell player when he signs it. 

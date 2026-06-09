@@ -18,6 +18,8 @@ export interface GameEvent {
   id: string;
   // references variant manifest event library
   template_key: string;
+  // set when the event was generated from or gated by an active campaign
+  campaign_id?: string | null;
   category: EventCategory;
   severity: EventSeverity;
   // null for market, agency, and windfall events

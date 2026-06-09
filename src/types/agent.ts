@@ -16,6 +16,8 @@ export interface AgentStats {
   negotiation: number;
   // lowers overhead and client costs
   operations: number;
+  // multiplies talent growth probability and amount for all roster clients
+  coaching: number;
 }
 
 export interface AgentState {

@@ -1,17 +1,42 @@
 import { GameEvent, EventOutcome, EventOption } from '../types/event';
 import { EventCategory, EventSeverity } from '../types/primitives';  // EventSeverity used in sort ORDER
-import { RunState } from '../types/run';
-import { VariantManifest } from '../types/manifest';
+import { NewsItem, RunState } from '../types/run';
+import { EventDefinition, VariantManifest } from '../types/manifest';
 
 // INVARIANTS (PRD §3.4):
 // - Frequency targets 0–2 per turn, weighted toward 0–1.
 // - Probability scales with exposure — roster size, Peak-client count, high-value contracts.
 // - Defense tracks reduce frequency and/or soften severity per event category.
 
-export const TARGET_EVENTS_PER_TURN_MAX = 2;
+export const TARGET_EVENTS_PER_TURN_MAX = 1;
 
 const generateId = (): string =>
   `evt_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
+
+const fillTemplate = (template: string, clientName?: string): string =>
+  template.replace(/\{client_name\}/g, clientName ?? 'A client');
+
+const campaignGate = (def: { campaign_type_keys?: string[] }): string[] =>
+  def.campaign_type_keys?.filter(Boolean) ?? [];
+
+const matchingActiveCampaigns = (state: RunState, def: { campaign_type_keys?: string[] }) => {
+  const keys = campaignGate(def);
+  if (keys.length === 0) return [];
+  return state.campaigns.filter(c => c.turns_remaining > 0 && keys.includes(c.type_key));
+};
+
+const isEventEligibleForState = (state: RunState, def: EventDefinition): boolean =>
+  campaignGate(def).length === 0 || matchingActiveCampaigns(state, def).length > 0;
+
+const makeEventNews = (state: RunState, event: GameEvent, outcome: EventOutcome): NewsItem => ({
+  id:               `news_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`,
+  turn_number:      state.turn_number,
+  type:             'event_fired',
+  description:      event.description,
+  money_delta:      outcome.money_delta,
+  reputation_delta: outcome.reputation_delta,
+  client_id:        event.client_id,
+});
 
 // ─── Exposure ─────────────────────────────────────────────────────────────────
 
@@ -24,7 +49,11 @@ export const computeExposure: ComputeExposure = (state) => {
   const highValueCount = state.contracts.filter(
     c => c.tier === 'client_entity' && c.amount >= 50_000,
   ).length;
-  return rosterSize * 0.15 + peakCount * 0.25 + highValueCount * 0.10;
+  const audienceExposure = state.roster.reduce(
+    (sum, c) => sum + Math.min(0.6, Math.log10(Math.max(100, c.audience)) / 10),
+    0,
+  );
+  return rosterSize * 0.15 + peakCount * 0.25 + highValueCount * 0.10 + audienceExposure;
 };
 
 export type ComputeEventProbability = (
@@ -83,6 +112,8 @@ export const selectEventTarget: SelectEventTarget = (state, category, _manifest)
 export type GenerateEvents = (state: RunState, manifest: VariantManifest) => GameEvent[];
 
 export const generateEvents: GenerateEvents = (state, manifest) => {
+  if (state.turn_number === 1) return [];
+
   const categories: EventCategory[] = ['client', 'market', 'agency', 'windfall'];
   const generated: GameEvent[] = [];
 
@@ -91,11 +122,13 @@ export const generateEvents: GenerateEvents = (state, manifest) => {
     const prob = computeEventProbability(state, category, manifest);
     if (Math.random() > prob) continue;
 
-    const candidates = manifest.events.filter(e => e.category === category);
+    const candidates = manifest.events.filter(e => e.category === category && isEventEligibleForState(state, e));
     if (candidates.length === 0) continue;
 
     const def = candidates[Math.floor(Math.random() * candidates.length)];
-    const clientId = selectEventTarget(state, category, manifest);
+    const campaign = matchingActiveCampaigns(state, def)[0] ?? null;
+    const clientId = campaign?.client_id ?? selectEventTarget(state, category, manifest);
+    const clientName = clientId ? state.roster.find(c => c.id === clientId)?.name : undefined;
 
     // Map manifest EventOptionDefinition → runtime EventOption
     const options: EventOption[] = def.options.map(o => ({
@@ -107,10 +140,11 @@ export const generateEvents: GenerateEvents = (state, manifest) => {
     generated.push({
       id:            generateId(),
       template_key:  def.key,
+      campaign_id:   campaign?.id ?? null,
       category:      def.category,
       severity:      def.severity,
       client_id:     clientId,
-      description:   def.description_template,
+      description:   fillTemplate(def.description_template, clientName),
       options,
       default_outcome: { ...def.default_outcome, injects_board_item_key: null },
       defense_track_key: def.defense_track_key,
@@ -175,7 +209,11 @@ export const resolveEvent: ResolveEvent = (state, eventId, optionKey, manifest) 
   if (event.client_id && Object.keys(outcome.stat_deltas).length > 0) {
     roster = state.roster.map(c =>
       c.id === event.client_id
-        ? { ...c, stats: applyStatDeltasToStats(c.stats, outcome.stat_deltas) }
+        ? {
+            ...c,
+            audience: applyAudienceDeltaForMarketability(c.audience, outcome.stat_deltas.marketability ?? 0),
+            stats: applyStatDeltasToStats(c.stats, outcome.stat_deltas),
+          }
         : c,
     );
   }
@@ -187,6 +225,7 @@ export const resolveEvent: ResolveEvent = (state, eventId, optionKey, manifest) 
     roster,
     pending_events:  state.pending_events.filter(e => e.id !== eventId),
     resolved_events: [...state.resolved_events, resolved],
+    news_feed:       [...state.news_feed, makeEventNews(state, resolved, outcome)],
     low_money_warning: money === 0 && state.money > 0 ? true : state.low_money_warning,
     total_earnings:  outcome.money_delta > 0 ? state.total_earnings + outcome.money_delta : state.total_earnings,
     peak_reputation: Math.max(state.peak_reputation, reputation),
@@ -210,6 +249,12 @@ const applyStatDeltasToStats = (
     result[key] = { ...stat, true_value: Math.max(0, Math.min(100, stat.true_value + delta)) };
   }
   return result;
+};
+
+const applyAudienceDeltaForMarketability = (audience: number, marketabilityDelta: number): number => {
+  if (marketabilityDelta === 0) return audience;
+  const percent = Math.max(-0.20, Math.min(0.20, marketabilityDelta * 0.015));
+  return Math.max(0, Math.round(audience * (1 + percent)));
 };
 
 export type ApplyEventDefaults = (state: RunState, manifest: VariantManifest) => RunState;
@@ -241,10 +286,11 @@ export const injectWindfallBoardItem: InjectWindfallBoardItem = (state, event, m
     id:               generateId(),
     type:             template.type,
     template_key:     template.key,
+    campaign_id:      event.campaign_id ?? null,
     client_id:        null,
     contract_id:      null,
     contract_draft:   null,
-    description:      template.description_template,
+    description:      fillTemplate(template.description_template, event.client_id ? state.roster.find(c => c.id === event.client_id)?.name : undefined),
     options:          [],
     default_on_ignore: { money_delta: 0, reputation_delta: 0, stat_deltas: {}, morale_delta: 0, activates_contract_id: null },
     expires_in:       template.expires_in,

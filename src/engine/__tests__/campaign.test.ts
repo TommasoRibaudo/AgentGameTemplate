@@ -3,9 +3,11 @@ import {
   startCampaign,
   closeCampaign,
   advanceCampaigns,
+  collectCatalogIncome,
   checkInstallmentEventTrigger,
   checkInstallmentTraitTrigger,
   settleCampaignObjectives,
+  buildCampaignSetup,
 } from '../campaign';
 import { makeRunState, makeClient, makeClientStats, makeManifest, makeObjective, makeContract, nextId } from './fixtures';
 import { CampaignTypeDefinition, EventDefinition, TraitDefinition } from '../../types/manifest';
@@ -36,6 +38,7 @@ const setupCampaignState = (campaignTypeOverrides?: Partial<CampaignTypeDefiniti
     id: nextId(),
     client_id: clientId,
     type_key: 'test_campaign',
+    setup: buildCampaignSetup(campaignType),
     total_turns: 4,
     turns_remaining: 4,
     installment_results: [],
@@ -87,6 +90,123 @@ describe('campaign — rollInstallment', () => {
   });
 });
 
+describe('campaign release campaigns', () => {
+  it('generates an album release plan for album campaigns', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ talent: 80, form: 75, marketability: 60 }) });
+    const manifest = makeManifest({
+      campaign_types: [makeCampaignType({ key: 'album_cycle', release_kind: 'album' })],
+    });
+    const state = makeRunState({ money: 20_000, roster: [client] });
+    const result = startCampaign(state, clientId, 'album_cycle', [], manifest);
+    expect(result.campaigns[0].release_plan?.kind).toBe('album');
+    expect(result.campaigns[0].release_plan?.songs).toHaveLength(10);
+    expect(result.campaigns[0].release_plan?.songs[0].quality).toBeGreaterThan(0);
+  });
+
+  it('gives non-zero reputation_delta for release campaign installments', () => {
+    // high form → great outcome → +2 rep
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ form: 95 }) });
+    const campaignType = makeCampaignType({ key: 'album_cycle', release_kind: 'album', form_weight: 1, variance: 0.01 });
+    const manifest = makeManifest({ campaign_types: [campaignType] });
+    const campaign: Campaign = {
+      id: nextId(), client_id: clientId, type_key: 'album_cycle',
+      total_turns: 4, turns_remaining: 4, installment_results: [], pending_objective_ids: [],
+    };
+    const state = makeRunState({ roster: [client], campaigns: [campaign] });
+    const result = rollInstallment(state, campaign.id, manifest);
+    expect(result.reputation_delta).toBe(2);
+  });
+
+  it('moves completed release campaigns into talent history and catalog', () => {
+    const clientId = nextId();
+    const campaignId = nextId();
+    const client = makeClient({ id: clientId, active_campaign_id: campaignId });
+    const campaignType = makeCampaignType({ key: 'single_release', label: 'Single Release', release_kind: 'single' });
+    const campaign: Campaign = {
+      id: campaignId,
+      client_id: clientId,
+      type_key: 'single_release',
+      release_plan: {
+        kind: 'single',
+        title: 'Test Single',
+        songs: [{ id: 'song_1', title: 'Test Single', quality: 82 }],
+      },
+      total_turns: 2,
+      turns_remaining: 0,
+      installment_results: [],
+      pending_objective_ids: [],
+    };
+    const manifest = makeManifest({ campaign_types: [campaignType] });
+    const state = makeRunState({ roster: [client], campaigns: [campaign] });
+    const result = closeCampaign(state, campaignId, manifest);
+    expect(result.roster[0].campaign_history).toHaveLength(1);
+    expect(result.roster[0].catalog_releases).toHaveLength(1);
+    expect(result.roster[0].catalog_releases[0].kind).toBe('single');
+  });
+
+  it('pays ongoing stream income and grows fans after release completion', () => {
+    const clientId = nextId();
+    const client = makeClient({
+      id: clientId,
+      audience: 20_000,
+      catalog_releases: [{
+        id: 'rel_1',
+        campaign_id: 'camp_1',
+        kind: 'single',
+        type_key: 'single_release',
+        title: 'Test Single',
+        songs: [{ id: 'song_1', title: 'Test Single', quality: 90 }],
+        released_turn: 1,
+        turns_since_release: 0,
+        album_units_sold: 0,
+        total_streams: 0,
+        album_income_total: 0,
+        stream_income_total: 0,
+        latest_turn_album_units: 0,
+        latest_turn_streams: 0,
+        latest_turn_income: 0,
+        is_selling_albums: false,
+      }],
+    });
+    const state = makeRunState({ money: 1_000, roster: [client] });
+    const result = collectCatalogIncome(state);
+    expect(result.income).toBeGreaterThan(0);
+    expect(result.fanGain).toBeGreaterThan(0);
+    expect(result.state.money).toBeGreaterThan(state.money);
+    expect(result.state.roster[0].catalog_releases[0].total_streams).toBeGreaterThan(0);
+  });
+
+  it('uses the existing fan base to drive album launch sales and then adds fans', () => {
+    const release = {
+      id: 'rel_1',
+      campaign_id: 'camp_1',
+      kind: 'album' as const,
+      type_key: 'album_cycle',
+      title: 'Test Album',
+      songs: Array.from({ length: 10 }, (_, index) => ({ id: `song_${index}`, title: `Song ${index}`, quality: 85 })),
+      released_turn: 1,
+      turns_since_release: 0,
+      album_units_sold: 0,
+      total_streams: 0,
+      album_income_total: 0,
+      stream_income_total: 0,
+      latest_turn_album_units: 0,
+      latest_turn_streams: 0,
+      latest_turn_income: 0,
+      is_selling_albums: true,
+    };
+    const lowFans = makeRunState({ roster: [makeClient({ audience: 5_000, catalog_releases: [release] })] });
+    const highFans = makeRunState({ roster: [makeClient({ audience: 500_000, catalog_releases: [release] })] });
+    const lowResult = collectCatalogIncome(lowFans);
+    const highResult = collectCatalogIncome(highFans);
+    expect(highResult.state.roster[0].catalog_releases[0].latest_turn_album_units)
+      .toBeGreaterThan(lowResult.state.roster[0].catalog_releases[0].latest_turn_album_units);
+    expect(highResult.fanGain).toBeGreaterThan(lowResult.fanGain);
+  });
+});
+
 // ─── startCampaign ───────────────────────────────────────────────────────────
 
 describe('campaign — startCampaign', () => {
@@ -114,6 +234,64 @@ describe('campaign — startCampaign', () => {
     const state = makeRunState({ roster: [makeClient({ id: clientId })] });
     const result = startCampaign(state, clientId, 'unknown_type', [], makeManifest());
     expect(result.campaigns).toHaveLength(0);
+  });
+
+  it('stores chosen campaign setup and deducts its budget', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId });
+    const manifest = makeManifest({ campaign_types: [makeCampaignType()] });
+    const state = makeRunState({ money: 20_000, roster: [client] });
+    const result = startCampaign(
+      state,
+      clientId,
+      'test_campaign',
+      [],
+      manifest,
+      { size: 'large', length: 6, budget: 8_000 },
+    );
+    expect(result.campaigns[0].setup?.size).toBe('large');
+    expect(result.campaigns[0].total_turns).toBe(6);
+    expect(result.money).toBe(12_000);
+  });
+
+  it('does not start a campaign when the setup budget is unaffordable', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId });
+    const manifest = makeManifest({ campaign_types: [makeCampaignType()] });
+    const state = makeRunState({ money: 1_000, roster: [client] });
+    const result = startCampaign(
+      state,
+      clientId,
+      'test_campaign',
+      [],
+      manifest,
+      { size: 'large', length: 6, budget: 8_000 },
+    );
+    expect(result).toBe(state);
+    expect(result.campaigns).toHaveLength(0);
+  });
+
+  it('does not start a second campaign for a client with an active campaign', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, active_campaign_id: 'camp_active' });
+    const manifest = makeManifest({ campaign_types: [makeCampaignType()] });
+    const state = makeRunState({ roster: [client] });
+    const result = startCampaign(state, clientId, 'test_campaign', [], manifest);
+    expect(result).toBe(state);
+    expect(result.campaigns).toHaveLength(0);
+  });
+});
+
+describe('campaign — buildCampaignSetup', () => {
+  it('scales campaign cost, payout, audience growth, and event risk by size', () => {
+    const campaignType = makeCampaignType();
+    const small = buildCampaignSetup(campaignType, 'small');
+    const large = buildCampaignSetup(campaignType, 'large');
+
+    expect(large.budget).toBeGreaterThan(small.budget);
+    expect(large.payout_multiplier).toBeGreaterThan(small.payout_multiplier);
+    expect(large.audience_multiplier).toBeGreaterThan(small.audience_multiplier);
+    expect(large.event_risk_multiplier).toBeGreaterThan(small.event_risk_multiplier);
   });
 });
 
@@ -185,6 +363,20 @@ describe('campaign — advanceCampaigns', () => {
     // At form=100, roll ≈ 100, money_delta ≈ (100/100)*3000 = 3000
     expect(result.money).toBeGreaterThan(0);
     expect(result.total_earnings).toBeGreaterThan(0);
+  });
+
+  it('grows client audience from campaign installments', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, audience: 8_000, stats: makeClientStats({ form: 100, marketability: 70 }) });
+    const campaignType = makeCampaignType({ form_weight: 1, variance: 0.01 });
+    const manifest = makeManifest({ campaign_types: [campaignType] });
+    const campaign: Campaign = {
+      id: nextId(), client_id: clientId, type_key: 'test_campaign',
+      total_turns: 4, turns_remaining: 4, installment_results: [], pending_objective_ids: [],
+    };
+    const state = makeRunState({ roster: [client], campaigns: [campaign] });
+    const result = advanceCampaigns(state, manifest);
+    expect(result.roster[0].audience).toBeGreaterThan(client.audience);
   });
 });
 
@@ -287,6 +479,21 @@ describe('campaign — checkInstallmentEventTrigger', () => {
     expect(event.default_outcome.money_delta).toBe(-500);
   });
 
+  it('prefers campaign-specific events and records the campaign id', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const { state, campaign, manifest: base } = setupCampaignState({ event_trigger_threshold: 50 });
+    const manifest = {
+      ...base,
+      events: [
+        makeEventDef({ key: 'generic_client_event' }),
+        makeEventDef({ key: 'campaign_client_event', campaign_type_keys: ['test_campaign'] }),
+      ],
+    };
+    const result = checkInstallmentEventTrigger(state, lowRollResult, campaign.id, manifest);
+    expect(result.pending_events[0].template_key).toBe('campaign_client_event');
+    expect(result.pending_events[0].campaign_id).toBe(campaign.id);
+  });
+
   it('is a no-op when campaign is not found', () => {
     const { state, manifest: base } = setupCampaignState();
     const manifest = { ...base, events: [makeEventDef()] };
@@ -362,6 +569,37 @@ describe('campaign — settleCampaignObjectives', () => {
     const result   = settleCampaignObjectives(state, campaign.id, manifest);
     expect(result.money).toBe(6_000);
     expect(result.contracts[0].objectives[0].is_paid).toBe(true);
+  });
+
+  it('pays only the agency cut for linked client-entity objectives', () => {
+    const clientId = nextId();
+    const agentContractId = nextId();
+    const client = makeClient({ id: clientId, agent_contract_id: agentContractId });
+    const agentContract = makeContract({
+      id: agentContractId, tier: 'agent_client', client_id: clientId,
+      your_cut: 25, amount: 0,
+    });
+    const objId = nextId();
+    const obj = makeObjective({ id: objId, payout: 8_000 });
+    const entityContract = makeContract({
+      tier: 'client_entity', client_id: clientId, entity_id: nextId(),
+      payout_type: 'per_objective', your_cut: null, objectives: [obj],
+    });
+    const campaign: Campaign = {
+      id: nextId(), client_id: clientId, type_key: 'test_campaign',
+      total_turns: 4, turns_remaining: 4, installment_results: [],
+      pending_objective_ids: [objId],
+    };
+    const manifest = makeManifest({ campaign_types: [makeCampaignType()] });
+    const state = makeRunState({
+      money: 1_000,
+      roster: [client],
+      contracts: [agentContract, entityContract],
+      campaigns: [campaign],
+    });
+    const result = settleCampaignObjectives(state, campaign.id, manifest);
+    expect(result.money).toBe(3_000);
+    expect(result.contracts[1].objectives[0].is_paid).toBe(true);
   });
 
   it('is a no-op when the campaign has no pending_objective_ids', () => {

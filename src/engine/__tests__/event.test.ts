@@ -56,6 +56,12 @@ describe('event — computeExposure', () => {
     const withoutBig = makeRunState({ roster: [client] });
     expect(computeExposure(withBig)).toBeGreaterThan(computeExposure(withoutBig));
   });
+
+  it('larger fan bases add event exposure', () => {
+    const lowFans = makeRunState({ roster: [makeClient({ audience: 1_000 })] });
+    const highFans = makeRunState({ roster: [makeClient({ audience: 1_000_000 })] });
+    expect(computeExposure(highFans)).toBeGreaterThan(computeExposure(lowFans));
+  });
 });
 
 // ─── computeEventProbability ─────────────────────────────────────────────────
@@ -156,6 +162,18 @@ describe('event — resolveEvent', () => {
     const state = makeRunState({ money: 100, low_money_warning: false, pending_events: [event] });
     const result = resolveEvent(state, event.id, null, makeManifest());
     expect(result.low_money_warning).toBe(true);
+  });
+
+  it('changes the targeted client fan base when an event changes marketability', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, audience: 10_000 });
+    const event = makeEvent({
+      client_id: clientId,
+      default_outcome: { money_delta: 0, reputation_delta: 0, stat_deltas: { marketability: -4 }, injects_board_item_key: null },
+    });
+    const state = makeRunState({ roster: [client], pending_events: [event] });
+    const result = resolveEvent(state, event.id, null, makeManifest());
+    expect(result.roster[0].audience).toBeLessThan(client.audience);
   });
 });
 
@@ -304,6 +322,13 @@ describe('event — generateEvents', () => {
     expect(events).toHaveLength(0);
   });
 
+  it('returns empty array on turn 1 regardless of probability', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const manifest = makeManifest({ events: [makeEventDef()] });
+    const state    = makeRunState({ roster: [makeClient()], turn_number: 1 });
+    expect(generateEvents(state, manifest)).toHaveLength(0);
+  });
+
   it('sets client_id for client-category events', () => {
     jest.spyOn(Math, 'random').mockReturnValue(0.01);
     const clientId = nextId();
@@ -313,6 +338,38 @@ describe('event — generateEvents', () => {
     if (events.length > 0 && events[0].category === 'client') {
       expect(events[0].client_id).toBe(clientId);
     }
+  });
+
+  it('only generates campaign-gated events when a matching campaign is active', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const campaignId = nextId();
+    const manifest = makeManifest({
+      events: [
+        makeEventDef({ key: 'tour_market', category: 'market', campaign_type_keys: ['tour'] }),
+        makeEventDef({ key: 'generic_market', category: 'market' }),
+      ],
+    });
+    const withoutCampaign = makeRunState({ roster: [makeClient({ id: clientId })], turn_number: 2 });
+    expect(generateEvents(withoutCampaign, manifest).some(e => e.template_key === 'tour_market')).toBe(false);
+
+    const withCampaign = makeRunState({
+      roster: [makeClient({ id: clientId })],
+      turn_number: 2,
+      campaigns: [{
+        id: campaignId,
+        client_id: clientId,
+        type_key: 'tour',
+        total_turns: 3,
+        turns_remaining: 3,
+        installment_results: [],
+        pending_objective_ids: [],
+      }],
+    });
+    const events = generateEvents(withCampaign, manifest);
+    const gated = events.find(e => e.template_key === 'tour_market');
+    expect(gated?.campaign_id).toBe(campaignId);
+    expect(gated?.client_id).toBe(clientId);
   });
 });
 

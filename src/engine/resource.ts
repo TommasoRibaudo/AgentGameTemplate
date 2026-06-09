@@ -11,6 +11,25 @@ export type RepTier = 'grassroots' | 'regional' | 'national' | 'elite';
 
 export const MAX_REPUTATION = 100;
 export const MIN_REPUTATION = 0;
+export const DEFAULT_AGENT_CUT = 15;
+
+export const getAgentCutPercent = (state: RunState, clientId: string | null): number => {
+  if (!clientId) return DEFAULT_AGENT_CUT;
+  const client = state.roster.find(c => c.id === clientId);
+  if (!client?.agent_contract_id) return DEFAULT_AGENT_CUT;
+  const agentContract = state.contracts.find(c => c.id === client.agent_contract_id);
+  if (!agentContract) return DEFAULT_AGENT_CUT;
+  return agentContract.your_cut ?? 0;
+};
+
+export const computeAgencyPayout = (
+  state: RunState,
+  contract: Pick<RunState['contracts'][number], 'tier' | 'client_id'>,
+  grossAmount: number,
+): number =>
+  contract.tier === 'client_entity'
+    ? Math.round(grossAmount * (getAgentCutPercent(state, contract.client_id) / 100))
+    : grossAmount;
 
 // ─── Money ───────────────────────────────────────────────────────────────────
 
@@ -108,7 +127,7 @@ export const settleObjectivePayouts: SettleObjectivePayouts = (state, _manifest)
     let settled = false;
     const updatedObjectives = contract.objectives.map(obj => {
       if (!obj.is_met || obj.is_paid) return obj;
-      s = applyMoneyDelta(s, obj.payout);
+      s = applyMoneyDelta(s, computeAgencyPayout(s, contract, obj.payout));
       settled = true;
       return { ...obj, is_paid: true };
     });
@@ -191,26 +210,24 @@ export const estimateClientAssetValue: EstimateClientAssetValue = (state, client
   if (!client) return 0;
 
   const arcMult = manifest.arc.stage_multipliers[client.arc_stage].income;
+  const audiencePremium = Math.max(0.85, Math.min(1.4, Math.log10(Math.max(100, client.audience)) / 4));
   const entityContracts = state.contracts.filter(
     c => c.tier === 'client_entity' && c.client_id === clientId,
   );
 
   let value = 0;
   for (const ec of entityContracts) {
-    const agentContract = client.agent_contract_id
-      ? state.contracts.find(c => c.id === client.agent_contract_id)
-      : null;
-    const cut = agentContract?.your_cut ?? 15;
+    const cut = getAgentCutPercent(state, clientId);
 
     if (ec.payout_type === 'per_month') {
-      value += ec.amount * (cut / 100) * ec.duration_remaining * arcMult;
+      value += ec.amount * (cut / 100) * ec.duration_remaining * arcMult * audiencePremium;
     } else if (ec.payout_type === 'lump_sum') {
-      value += ec.amount * (cut / 100) * arcMult;
+      value += ec.amount * (cut / 100) * arcMult * audiencePremium;
     } else {
       // per_objective: estimate half of remaining objectives paying out
       const unpaid = ec.objectives.filter(o => !o.is_paid).length;
       const avgPayout = ec.objectives.reduce((sum, o) => sum + o.payout, 0) / (ec.objectives.length || 1);
-      value += (unpaid * 0.5) * avgPayout * (cut / 100) * arcMult;
+      value += (unpaid * 0.5) * avgPayout * (cut / 100) * arcMult * audiencePremium;
     }
   }
   return Math.round(value);

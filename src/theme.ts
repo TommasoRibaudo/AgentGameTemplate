@@ -51,3 +51,10 @@ export function formatDelta(n: number, prefix = ''): string {
   if (n === 0) return '—';
   return `${n > 0 ? '+' : ''}${prefix}${n}`;
 }
+
+// 1 turn ≈ 1 month. Displays as months (< 12) or years (≥ 12, rounded to nearest 0.5).
+export function formatDuration(turns: number): string {
+  if (turns < 12) return turns === 1 ? '1 month' : `${turns} months`;
+  const years = Math.round((turns / 12) * 2) / 2;
+  return years === 1 ? '1 year' : `${years} years`;
+}

@@ -22,16 +22,27 @@ export const fireLowMoneyWarning: FireLowMoneyWarning = (state) =>
 
 export type ComputeCreditCeiling = (state: RunState, manifest: VariantManifest) => number;
 
+export const roundCreditAmount = (amount: number): number => {
+  if (amount <= 0) return 0;
+  if (amount < 1_000) return Math.round(amount);
+  return Math.round(amount / 1_000) * 1_000;
+};
+
 export const computeCreditCeiling: ComputeCreditCeiling = (state, manifest) => {
   const { credit_ceiling_rep_weight, credit_ceiling_asset_weight } = manifest.economy;
   const rosterAssetValue = state.roster.reduce(
     (sum, c) => sum + estimateClientAssetValue(state, c.id, manifest), 0,
   );
-  return Math.round(
+  return roundCreditAmount(
     state.reputation * credit_ceiling_rep_weight +
     rosterAssetValue * credit_ceiling_asset_weight,
   );
 };
+
+export type ComputeCreditHeadroom = (state: RunState, manifest: VariantManifest) => number;
+
+export const computeCreditHeadroom: ComputeCreditHeadroom = (state, manifest) =>
+  roundCreditAmount(computeCreditCeiling(state, manifest) - state.debt.balance);
 
 // ─── Debt state ───────────────────────────────────────────────────────────────
 
@@ -55,7 +66,7 @@ export type TakeLoan = (state: RunState, amount: number, manifest: VariantManife
 
 export const takeLoan: TakeLoan = (state, amount, manifest) => {
   const ceiling = computeCreditCeiling(state, manifest);
-  const headroom = ceiling - state.debt.balance;
+  const headroom = computeCreditHeadroom(state, manifest);
   if (amount > headroom || amount <= 0) return state;
 
   const newBalance     = state.debt.balance + amount;
@@ -78,13 +89,12 @@ export type ServiceDebt = (state: RunState, manifest: VariantManifest) => RunSta
 export const serviceDebt: ServiceDebt = (state, manifest) => {
   if (!state.debt.is_active || state.debt.balance <= 0) return state;
 
-  const repayment = state.debt.per_turn_repayment;
+  const repayment = Math.min(state.debt.balance, state.debt.per_turn_repayment);
   const canRepay  = state.money >= repayment;
   const ceiling   = computeCreditCeiling(state, manifest);
-  const headroom  = ceiling - state.debt.balance;
 
-  if (!canRepay && headroom <= 0) {
-    // Missed repayment + no credit headroom → start/advance bankruptcy warning
+  if (!canRepay) {
+    // Missed repayment starts/advances the bankruptcy grace loop.
     const turnsLeft = state.debt.bankruptcy_warning_turns_remaining;
     return {
       ...state,
@@ -98,8 +108,10 @@ export const serviceDebt: ServiceDebt = (state, manifest) => {
   }
 
   // Normal repayment
-  const newBalance = Math.max(0, state.debt.balance - repayment);
-  const interest   = Math.round(newBalance * manifest.economy.debt_interest_rate);
+  const balanceAfterRepayment = Math.max(0, state.debt.balance - repayment);
+  const interest = Math.round(balanceAfterRepayment * manifest.economy.debt_interest_rate);
+  const newBalance = balanceAfterRepayment > 0 ? balanceAfterRepayment + interest : 0;
+  const nextRepayment = Math.round(newBalance * manifest.economy.debt_interest_rate);
 
   return {
     ...applyMoneyDelta(state, -repayment),
@@ -107,7 +119,7 @@ export const serviceDebt: ServiceDebt = (state, manifest) => {
       ...state.debt,
       balance:            newBalance,
       credit_ceiling:     ceiling,
-      per_turn_repayment: interest,
+      per_turn_repayment: nextRepayment,
       is_active:          newBalance > 0,
       bankruptcy_warning_turns_remaining: null, // reset warning on successful repayment
     },
@@ -140,7 +152,8 @@ export const computeCareerScore: ComputeCareerScore = (state) => {
   const repScore        = state.peak_reputation * 100;
   const earningsScore   = Math.round(state.total_earnings / 100);
   const developedScore  = state.clients_developed * 500;
-  return repScore + earningsScore + developedScore;
+  const fanScore        = Math.round(state.roster.reduce((sum, c) => sum + c.audience, 0) / 100);
+  return repScore + earningsScore + developedScore + fanScore;
 };
 
 export type EndRun = (

@@ -26,7 +26,7 @@ export function EventModal({ event, clientName, clientLabel = 'Client', onResolv
       transparent
       animationType="fade"
       statusBarTranslucent
-      onRequestClose={() => onResolve(event.id, null)}
+      onRequestClose={() => {}}
     >
       <View style={styles.backdrop}>
         <View style={[styles.sheet, event.severity === 'crisis' && styles.sheetCrisis]}>
@@ -43,11 +43,6 @@ export function EventModal({ event, clientName, clientLabel = 'Client', onResolv
 
             <Text style={styles.description}>{event.description}</Text>
 
-            <View style={styles.defaultSection}>
-              <Text style={styles.sectionLabel}>If unresolved</Text>
-              <OutcomePreview outcome={event.default_outcome} />
-            </View>
-
             <View style={styles.options}>
               {event.options.map(opt => (
                 <TouchableOpacity
@@ -60,12 +55,6 @@ export function EventModal({ event, clientName, clientLabel = 'Client', onResolv
                   <OutcomePreview outcome={opt.outcome} compact />
                 </TouchableOpacity>
               ))}
-              <TouchableOpacity
-                style={styles.dismissBtn}
-                onPress={() => onResolve(event.id, null)}
-              >
-                <Text style={styles.dismissText}>Apply default and dismiss</Text>
-              </TouchableOpacity>
             </View>
           </ScrollView>
         </View>
@@ -144,19 +133,6 @@ const styles = StyleSheet.create({
     fontSize: FontSize.lg,
     lineHeight: 26,
   },
-  sectionLabel: {
-    color: Colors.textDim,
-    fontSize: FontSize.xs,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: Spacing.xs,
-  },
-  defaultSection: {
-    backgroundColor: Colors.surfaceRaised,
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-    gap: Spacing.xs,
-  },
   options: {
     gap: Spacing.sm,
   },
@@ -172,14 +148,6 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     fontSize: FontSize.md,
     fontWeight: '600',
-  },
-  dismissBtn: {
-    paddingVertical: Spacing.md,
-    alignItems: 'center',
-  },
-  dismissText: {
-    color: Colors.textDim,
-    fontSize: FontSize.sm,
   },
   outcomeLine: {
     flexDirection: 'row',

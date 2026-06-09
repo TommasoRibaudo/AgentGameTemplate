@@ -8,6 +8,7 @@ export interface ClientRowProps {
   client: Client;
   talentLabel: string;
   formLabel: string;
+  audienceLabel: string;
   hasCampaign: boolean;
   contractStatus: 'active' | 'expiring' | 'none';
   onPress: (clientId: string) => void;
@@ -17,6 +18,7 @@ export function ClientRow({
   client,
   talentLabel,
   formLabel,
+  audienceLabel,
   hasCampaign,
   contractStatus,
   onPress,
@@ -51,6 +53,10 @@ export function ClientRow({
         </View>
       </View>
       <View style={styles.stats}>
+        <View style={styles.audienceRow}>
+          <Text style={styles.audienceLabel}>{audienceLabel}</Text>
+          <Text style={styles.audienceValue}>{client.audience.toLocaleString()}</Text>
+        </View>
         <View style={styles.statItem}>
           <FogBand label={talentLabel} stat={client.stats.talent} size="compact" />
         </View>
@@ -116,6 +122,20 @@ const styles = StyleSheet.create({
   },
   stats: {
     gap: Spacing.xs,
+  },
+  audienceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  audienceLabel: {
+    color: Colors.textDim,
+    fontSize: FontSize.xs,
+    textTransform: 'uppercase',
+  },
+  audienceValue: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.xs,
+    fontWeight: '600',
   },
   statItem: {},
 });

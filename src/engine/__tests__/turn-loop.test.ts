@@ -7,7 +7,7 @@ import {
   runTurnClose,
   turnOrchestrator,
 } from '../turn-loop';
-import { makeRunState, makeManifest, makeClient, makeClientStats, makeContract, makeObjective, makeDebtState, nextId } from './fixtures';
+import { makeRunState, makeManifest, makeClient, makeClientStats, makeContract, makeObjective, makeDebtState, makeAgentState, nextId } from './fixtures';
 
 // ─── assertPhase ─────────────────────────────────────────────────────────────
 
@@ -95,10 +95,61 @@ describe('turn-loop — runUpkeep', () => {
     expect(result.debt.balance).toBeLessThan(5_000);
   });
 
+  it('adds debt repayment news during upkeep', () => {
+    const debt = makeDebtState({ is_active: true, balance: 5_000, per_turn_repayment: 500 });
+    const state = makeRunState({ phase: 'upkeep', money: 20_000, debt });
+    const { news } = runUpkeep(state, makeManifest());
+    expect(news.some(n => n.type === 'debt_repayment' && n.money_delta === -500)).toBe(true);
+  });
+
+  it('adds debt missed news when repayment cannot be serviced', () => {
+    const debt = makeDebtState({ is_active: true, balance: 5_000, per_turn_repayment: 500 });
+    const state = makeRunState({ phase: 'upkeep', money: 0, reputation: 80, debt });
+    const { state: result, news } = runUpkeep(state, makeManifest());
+    expect(result.debt.bankruptcy_warning_turns_remaining).toBe(1);
+    expect(news.some(n => n.type === 'debt_missed' && n.description.includes('Grace turns remaining: 1'))).toBe(true);
+  });
+
+  it('adds debt recovered news when a warning is cleared by repayment', () => {
+    const debt = makeDebtState({
+      is_active: true,
+      balance: 1_000,
+      per_turn_repayment: 100,
+      bankruptcy_warning_turns_remaining: 1,
+    });
+    const state = makeRunState({ phase: 'upkeep', money: 20_000, debt });
+    const { state: result, news } = runUpkeep(state, makeManifest());
+    expect(result.debt.bankruptcy_warning_turns_remaining).toBeNull();
+    expect(news.some(n => n.type === 'debt_recovered')).toBe(true);
+  });
+
+  it('adds debt opened news when money runs out during upkeep', () => {
+    const state = makeRunState({ phase: 'upkeep', money: 0, debt: makeDebtState({ is_active: false }) });
+    const { state: result, news } = runUpkeep(state, makeManifest());
+    expect(result.debt.is_active).toBe(true);
+    expect(news.some(n => n.type === 'debt_opened')).toBe(true);
+  });
+
   it('increments turns_on_roster for all clients', () => {
     const emptyState = makeRunState({ phase: 'upkeep' });
     const { state: result } = runUpkeep(emptyState, makeManifest());
     expect(result.phase).toBe('decision');
+  });
+
+  it('applies building development to client stats during upkeep', () => {
+    const client = makeClient({ stats: makeClientStats({ form: 40 }) });
+    const state = makeRunState({
+      phase: 'upkeep',
+      money: 50_000,
+      roster: [client],
+      agent: makeAgentState({
+        defense_tracks: [{ key: 'training_facility', level: 1, per_turn_cost: 300 }],
+      }),
+    });
+
+    const { state: result } = runUpkeep(state, makeManifest());
+
+    expect(result.roster[0].stats.form.true_value).toBe(41);
   });
 
   it('fires client_milestone news when a client advances arc stage', () => {
@@ -145,10 +196,12 @@ describe('turn-loop — runDecisionPhase', () => {
       id: `prospect_${i}`,
       name: `Prospect ${i}`,
       arc_stage: 'rising' as const,
+      audience: 5_000,
       stats: makeClientStats(),
       scouting_invested: 0,
+      max_potential: 80,
     }));
-    const state = makeRunState({ phase: 'decision', prospects: existingProspects });
+    const state = makeRunState({ phase: 'decision', reputation: 80, prospects: existingProspects });
     const { state: result } = runDecisionPhase(state, makeManifest());
     expect(result.prospects.length).toBe(6);
   });
@@ -158,10 +211,12 @@ describe('turn-loop — runDecisionPhase', () => {
       id: `prospect_${i}`,
       name: `Prospect ${i}`,
       arc_stage: 'rising' as const,
+      audience: 5_000,
       stats: makeClientStats(),
       scouting_invested: 0,
+      max_potential: 80,
     }));
-    const state = makeRunState({ phase: 'decision', prospects: existingProspects });
+    const state = makeRunState({ phase: 'decision', reputation: 80, prospects: existingProspects });
     const { state: result } = runDecisionPhase(state, makeManifest());
     expect(result.prospects.length).toBe(6);
   });

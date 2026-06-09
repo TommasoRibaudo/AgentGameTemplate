@@ -29,6 +29,10 @@ export type NewsItemType =
   | 'event_fired'
   | 'contract_activated'
   | 'contract_expired'
+  | 'debt_opened'
+  | 'debt_repayment'
+  | 'debt_missed'
+  | 'debt_recovered'
   | 'upkeep_summary';
 
 export interface NewsItem {
@@ -44,6 +48,7 @@ export interface NewsItem {
 // Top-level game state. This is the single source of truth persisted between sessions.
 export interface RunState {
   id: string;
+  player_name: string;
   variant_id: string;             // links saved run back to its manifest via MANIFEST_REGISTRY
   turn_number: number;
   career_length: number;          // total turns available this career (open question §6.1)

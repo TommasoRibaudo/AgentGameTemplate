@@ -16,6 +16,10 @@ export const NEWS_ITEM_ICONS: Record<NewsItemType, string> = {
   event_fired:          '!',
   contract_activated:   '✓',
   contract_expired:     '✗',
+  debt_opened:          '!',
+  debt_repayment:       '$',
+  debt_missed:          '!',
+  debt_recovered:       '$',
   upkeep_summary:       '↻',
 };
 

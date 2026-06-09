@@ -1,5 +1,6 @@
 import {
   computeObservedStat,
+  canInvestScouting,
   refreshClientFog,
   refreshProspectFog,
   investScouting,
@@ -26,7 +27,7 @@ describe('client — computeObservedStat', () => {
     const stat = makeFoggedStat(60, { scouting_invested: 600 });
     const { observed_min, observed_max } = computeObservedStat(
       stat, 'talent',
-      makeAgentState({ stats: { stat_scouting: 7, insight_scouting: 0, negotiation: 0, operations: 0 } }),
+      makeAgentState({ stats: { stat_scouting: 7, insight_scouting: 0, negotiation: 0, operations: 0, coaching: 0 } }),
       16,
     );
     expect(observed_max - observed_min).toBeGreaterThanOrEqual(FOG_FLOOR_HARD * 2);
@@ -36,7 +37,7 @@ describe('client — computeObservedStat', () => {
     const stat = makeFoggedStat(60, { scouting_invested: 600 });
     const { observed_min, observed_max } = computeObservedStat(
       stat, 'form',
-      makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 7, negotiation: 0, operations: 0 } }),
+      makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 7, negotiation: 0, operations: 0, coaching: 0 } }),
       16,
     );
     expect(observed_max - observed_min).toBeGreaterThanOrEqual(FOG_FLOOR_SOFT * 2);
@@ -55,6 +56,20 @@ describe('client — computeObservedStat', () => {
     const young = computeObservedStat(stat, 'form', baseAgent, 0);
     const veteran = computeObservedStat(stat, 'form', baseAgent, 16);
     expect(veteran.observed_max - veteran.observed_min).toBeLessThan(young.observed_max - young.observed_min);
+  });
+
+  it('fog narrows with matching infrastructure', () => {
+    const stat = makeFoggedStat(60);
+    const base = computeObservedStat(stat, 'marketability', baseAgent, 0);
+    const withStudio = computeObservedStat(
+      stat,
+      'marketability',
+      makeAgentState({
+        defense_tracks: [{ key: 'media_studio', level: 2, per_turn_cost: 300 }],
+      }),
+      0,
+    );
+    expect(withStudio.observed_max - withStudio.observed_min).toBeLessThan(base.observed_max - base.observed_min);
   });
 
   it('observed_min is always >= 0 and observed_max is always <= 100', () => {
@@ -256,12 +271,14 @@ describe('client — checkTraitGrant', () => {
 
 // ─── refreshProspectFog ───────────────────────────────────────────────────────
 
-const makeProspect = (overrides?: Partial<{ id: string; name: string; arc_stage: 'rising' | 'peak' | 'declining'; scouting_invested: number }>) => ({
+const makeProspect = (overrides?: Partial<{ id: string; name: string; arc_stage: 'rising' | 'peak' | 'declining'; audience: number; scouting_invested: number; max_potential: number }>) => ({
   id:                overrides?.id ?? nextId(),
   name:              overrides?.name ?? 'Test Prospect',
   arc_stage:         (overrides?.arc_stage ?? 'rising') as 'rising' | 'peak' | 'declining',
+  audience:          overrides?.audience ?? 5_000,
   stats:             makeClientStats(),
   scouting_invested: overrides?.scouting_invested ?? 0,
+  max_potential:     overrides?.max_potential ?? 80,
 });
 
 describe('client — refreshProspectFog', () => {
@@ -286,8 +303,8 @@ describe('client — refreshProspectFog', () => {
 
   it('narrows fog as insight_scouting level increases', () => {
     const prospect = makeProspect();
-    const lowAgent  = makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 0, operations: 0 } });
-    const highAgent = makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 7, negotiation: 0, operations: 0 } });
+    const lowAgent  = makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 0, operations: 0, coaching: 0 } });
+    const highAgent = makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 7, negotiation: 0, operations: 0, coaching: 0 } });
     const low  = refreshProspectFog(prospect, lowAgent);
     const high = refreshProspectFog(prospect, highAgent);
     const lowBand  = low.stats.form.observed_max  - low.stats.form.observed_min;
@@ -323,6 +340,36 @@ describe('client — investScouting', () => {
     const client = makeClient({ stats: makeClientStats({ talent: 72 }) });
     const result = investScouting(client, 'talent', 300, makeAgentState()) as Client;
     expect(result.stats.talent.true_value).toBe(72);
+  });
+
+  it('stops investing once the minimum fog window is reached', () => {
+    const agent = makeAgentState({ stats: { stat_scouting: 7, insight_scouting: 0, negotiation: 0, operations: 0, coaching: 0 } });
+    const client = makeClient({
+      turns_on_roster: 16,
+      stats: makeClientStats({
+        talent: 60,
+      }),
+    });
+    const talentAtMinimum = {
+      ...client.stats.talent,
+      scouting_invested: 600,
+    };
+    const atMinimum = {
+      ...client,
+      stats: {
+        ...client.stats,
+        talent: {
+          ...talentAtMinimum,
+          ...computeObservedStat(talentAtMinimum, 'talent', agent, 16),
+        },
+      },
+    };
+
+    const result = investScouting(atMinimum, 'talent', 500, agent) as Client;
+
+    expect(result).toBe(atMinimum);
+    expect(result.stats.talent.scouting_invested).toBe(600);
+    expect(canInvestScouting(atMinimum, 'talent', 500, agent)).toBe(false);
   });
 });
 
@@ -378,6 +425,15 @@ describe('client — signClient', () => {
     const state = makeRunState({ prospects: [prospect] });
     const result = signClient(state, prospectId, contractId, makeAgentState());
     expect(result.roster[0].agent_contract_id).toBe(contractId);
+  });
+
+  it('preserves audience when promoting a prospect', () => {
+    const prospectId = nextId();
+    const contractId = nextId();
+    const prospect = makeProspect({ id: prospectId, audience: 12_345 });
+    const state = makeRunState({ prospects: [prospect] });
+    const result = signClient(state, prospectId, contractId, makeAgentState());
+    expect(result.roster[0].audience).toBe(12_345);
   });
 
   it('updates existing contract client_id to match the signed prospect', () => {

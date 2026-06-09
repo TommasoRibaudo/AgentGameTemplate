@@ -8,13 +8,16 @@ import { createNewRun } from './initRun';
 
 // ── Engine imports ────────────────────────────────────────────────────────────
 import { turnOrchestrator }                             from '../engine/turn-loop';
-import { resolveDecisionItem, hydrateContractOffer }    from '../engine/decision-queue';
+import { resolveDecisionItem, hydrateContractOffer, resolveCounteroffer } from '../engine/decision-queue';
 import { resolveEvent as engineResolveEvent }           from '../engine/event';
-import { upgradeAgentStat, upgradeInfrastructure }      from '../engine/progression';
-import { takeLoan, retireVoluntarily as engineRetire }  from '../engine/failure';
-import { investScouting, signClient, releaseClient }    from '../engine/client';
+import { boostClientStat, upgradeAgentStat, upgradeInfrastructure } from '../engine/progression';
+import { openDebtState, takeLoan, retireVoluntarily as engineRetire } from '../engine/failure';
+import { canInvestScouting, investScouting, signClient, releaseClient } from '../engine/client';
 import { startCampaign }                                from '../engine/campaign';
+import { applyMoneyDelta }                              from '../engine/resource';
 import { DecisionItem }                                 from '../types/decision';
+import { CounterTerms }                                from '../types/contract';
+import { CampaignSetup }                                from '../types/campaign';
 
 const EMPTY_ARRAY: never[] = [];
 
@@ -28,7 +31,7 @@ interface RunStore {
   manifest: VariantManifest | null;
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
-  startNewRun:      (manifest: VariantManifest) => void;
+  startNewRun:      (manifest: VariantManifest, playerName?: string) => void;
   loadExistingRun:  (state: RunState, manifest: VariantManifest) => void;
   clearRun:         () => void;
 
@@ -38,6 +41,7 @@ interface RunStore {
 
   // ── Decision board ────────────────────────────────────────────────────────
   resolveDecision: (itemId: string, optionKey: string) => void;
+  counterOffer:    (itemId: string, counter: CounterTerms) => 'accepted' | 'revised' | 'rejected';
 
   // ── Events ────────────────────────────────────────────────────────────────
   resolveEvent: (eventId: string, optionKey: string | null) => void;
@@ -52,9 +56,10 @@ interface RunStore {
 
   // ── Roster management ─────────────────────────────────────────────────────
   investScouting:    (entityId: string, statKey: CoreStatKey, amount: number) => void;
+  boostClientStat:   (clientId: string, statKey: Exclude<CoreStatKey, 'talent'>) => void;
   signClient:        (prospectId: string, contractId: string) => void;
   releaseClient:     (clientId: string) => void;
-  startCampaign:     (clientId: string, campaignTypeKey: string, linkedObjectiveIds: string[]) => void;
+  startCampaign:     (clientId: string, campaignTypeKey: string, linkedObjectiveIds: string[], setup?: Partial<Pick<CampaignSetup, 'size' | 'length' | 'budget'>>) => void;
   queueSigningOffer: (prospectId: string) => void;
 }
 
@@ -87,8 +92,8 @@ export const useRunStore = create<RunStore>((set, get) => {
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
 
-    startNewRun: (manifest) =>
-      set({ state: createNewRun(manifest), manifest }),
+    startNewRun: (manifest, playerName) =>
+      set({ state: createNewRun(manifest, playerName), manifest }),
 
     loadExistingRun: (state, manifest) =>
       set({ state, manifest }),
@@ -114,6 +119,18 @@ export const useRunStore = create<RunStore>((set, get) => {
 
     resolveDecision: (itemId, optionKey) =>
       apply((state, manifest) => resolveDecisionItem(state, itemId, optionKey, manifest)),
+
+    counterOffer: (itemId, counter) => {
+      const { state, manifest } = get();
+      if (!state || !manifest) return 'rejected';
+      const newState = resolveCounteroffer(state, itemId, counter, manifest);
+      set({ state: newState });
+      const item = newState.decision_board.find(i => i.id === itemId);
+      if (!item) return 'rejected';
+      if (item.chosen_option_key === 'counter_accepted') return 'accepted';
+      if (item.chosen_option_key === 'counter_rejected') return 'rejected';
+      return 'revised';
+    },
 
     // ── Events ───────────────────────────────────────────────────────────────
 
@@ -143,12 +160,33 @@ export const useRunStore = create<RunStore>((set, get) => {
         const entity =
           state.roster.find(c => c.id === entityId) ??
           state.prospects.find(p => p.id === entityId);
-        if (!entity) return state;
+        if (!entity || amount <= 0 || state.money < amount) return state;
+        if (!canInvestScouting(entity, statKey, amount, state.agent)) return state;
+
         const updated = investScouting(entity, statKey, amount, state.agent);
+        if (updated === entity) return state;
+
         const isOnRoster = state.roster.some(c => c.id === entityId);
+        let nextState = applyMoneyDelta(state, -amount);
+        if (nextState.money <= 0) nextState = openDebtState(nextState, manifest);
+
         return isOnRoster
-          ? { ...state, roster:    state.roster.map(c    => c.id === entityId ? updated as typeof c    : c) }
-          : { ...state, prospects: state.prospects.map(p => p.id === entityId ? updated as typeof p : p) };
+          ? { ...nextState, roster: nextState.roster.map(c => c.id === entityId ? updated as typeof c : c) }
+          : {
+              ...nextState,
+              prospects: nextState.prospects.map(p =>
+                p.id === entityId
+                  ? { ...updated as typeof p, scouting_invested: p.scouting_invested + amount }
+                  : p,
+              ),
+            };
+      }),
+
+    boostClientStat: (clientId, statKey) =>
+      apply((state, manifest) => {
+        const nextState = boostClientStat(state, clientId, statKey);
+        if (nextState === state || nextState.money > 0 || nextState.debt.is_active) return nextState;
+        return openDebtState(nextState, manifest);
       }),
 
     signClient: (prospectId, contractId) =>
@@ -183,8 +221,8 @@ export const useRunStore = create<RunStore>((set, get) => {
         return { ...state, decision_board: [...state.decision_board, item] };
       }),
 
-    startCampaign: (clientId, campaignTypeKey, linkedObjectiveIds) =>
-      apply((state, manifest) => startCampaign(state, clientId, campaignTypeKey, linkedObjectiveIds, manifest)),
+    startCampaign: (clientId, campaignTypeKey, linkedObjectiveIds, setup) =>
+      apply((state, manifest) => startCampaign(state, clientId, campaignTypeKey, linkedObjectiveIds, manifest, setup)),
   };
 });
 

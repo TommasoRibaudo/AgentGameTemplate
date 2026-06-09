@@ -31,11 +31,16 @@ export const makeClient = (overrides?: Partial<Client>): Client => ({
   id: nextId(),
   name: 'Test Client',
   arc_stage: 'rising',
+  audience: 10_000,
   stats: makeClientStats(),
   traits: [],
+  decision_option_counts: {},
+  max_potential: 80,
   turns_on_roster: 0,
   turns_at_stage: 0,
   active_campaign_id: null,
+  campaign_history: [],
+  catalog_releases: [],
   agent_contract_id: null,
   ...overrides,
 });
@@ -64,6 +69,7 @@ export const makeContract = (overrides?: Partial<Contract>): Contract => ({
   counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null },
   default_on_ignore: 'reject',
   expires_in: null,
+  exclusivity_scope: null,
   turns_active: 0,
   ...overrides,
 });
@@ -79,7 +85,7 @@ export const makeDebtState = (overrides?: Partial<DebtState>): DebtState => ({
 });
 
 export const makeAgentState = (overrides?: Partial<AgentState>): AgentState => ({
-  stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 0, operations: 0 },
+  stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 0, operations: 0, coaching: 0 },
   roster_capacity: 5,
   defense_tracks: [],
   ...overrides,
@@ -87,6 +93,7 @@ export const makeAgentState = (overrides?: Partial<AgentState>): AgentState => (
 
 export const makeRunState = (overrides?: Partial<RunState>): RunState => ({
   id: nextId(),
+  player_name: 'Test Manager',
   variant_id: 'music_v1',
   turn_number: 1,
   career_length: 60,
@@ -124,6 +131,7 @@ const makeEconomy = (): EconomyConfig => ({
   agent_stat_upgrade_cost: { money: 2_000, reputation: 5 },
   roster_slot_upgrade_cost: { money: 5_000 },
   defense_track_upgrade_cost: { money: 2_000, per_turn_recurring: 200 },
+  income_satisfaction_threshold: 8_000,
 });
 
 const makeArcConfig = (): ArcConfig => ({
@@ -146,6 +154,7 @@ export const makeManifest = (overrides?: Partial<VariantManifest>): VariantManif
     agent: 'Manager',
     money: 'Cash',
     reputation: 'Clout',
+    audience: 'Fans',
     stat_labels: { talent: 'Talent', form: 'Form', marketability: 'Marketability', morale: 'Morale' },
   },
   stat_sub_attributes: [],

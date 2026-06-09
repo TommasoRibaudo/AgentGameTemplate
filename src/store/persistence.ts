@@ -14,7 +14,7 @@ const RUN_KEY  = 'run_active';
 const META_KEY = 'meta';
 
 // Bump when serialized shape changes incompatibly; triggers a clean slate.
-const SAVE_VERSION = 1;
+const SAVE_VERSION = 2;
 
 interface RunSavePayload {
   version: number;
@@ -50,7 +50,10 @@ export async function loadRun(): Promise<RunState | null> {
   // Stale version → discard; migrations not yet implemented
   if (payload.version !== SAVE_VERSION) return null;
 
-  return payload.state;
+  return {
+    ...payload.state,
+    player_name: payload.state.player_name ?? 'Manager',
+  };
 }
 
 export async function clearSavedRun(): Promise<void> {
@@ -94,19 +97,16 @@ export async function loadMetaStore(): Promise<Pick<MetaSavePayload, 'completed_
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function useAutoSave(): void {
-  const phase      = useRunStore(s => s.state?.phase);
-  const turnNumber = useRunStore(s => s.state?.turn_number);
-  const runState   = useRunStore(s => s.state);
+  const runState = useRunStore(s => s.state);
 
   const completedRuns       = useMetaStore(s => s.completed_runs);
   const unlockedAchievements= useMetaStore(s => s.unlocked_achievements);
 
-  // Save run at every turn_close transition
+  // Save run on every state mutation so mid-turn progress survives app close.
   useEffect(() => {
-    if (phase !== 'turn_close' || !runState) return;
+    if (!runState) return;
     saveRun(runState).catch(console.error);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, turnNumber]);
+  }, [runState]);
 
   // Save meta when completed_runs changes (run ended) or achievements unlock
   useEffect(() => {

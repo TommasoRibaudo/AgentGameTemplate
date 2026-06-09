@@ -12,6 +12,7 @@ export interface DomainLabels {
   agent: string;        // e.g. 'Manager', 'Agent'
   money: string;        // e.g. 'Cash', 'Budget'
   reputation: string;   // e.g. 'Clout', 'Prestige'
+  audience: string;     // e.g. 'Fans', 'Followers', 'Viewers'
   stat_labels: Record<CoreStatKey, string>;
 }
 
@@ -34,6 +35,7 @@ export interface EntityTypeDefinition {
 export interface CampaignTypeDefinition {
   key: string;
   label: string;
+  release_kind?: 'album' | 'single';
   total_turns: number;
   // Form is the primary driver; variance is layered on top
   form_weight: number;
@@ -60,6 +62,15 @@ export interface TraitDefinition {
   trigger_condition_key: string;
   // the installment/resolution roll must exceed this to trigger a grant check
   trigger_threshold: number;
+  // optional: also grant this trait from repeated decisions — once the player has chosen
+  // option_key on template_key at least required_count times for this client, each
+  // further choice rolls against probability (0–1) for a chance to grant the trait
+  decision_trigger?: {
+    template_key: string;
+    option_key: string;
+    required_count: number;
+    probability: number;
+  };
 }
 
 // §5.1.6 — event library entry
@@ -81,8 +92,10 @@ export interface EventDefinition {
   category: EventCategory;
   severity: EventSeverity;
   description_template: string;   // may include {client_name} etc. for substitution
+  // If present, this event can only fire while one of these campaign types is active.
+  campaign_type_keys?: string[];
   options: EventOptionDefinition[];
-  // fires when the player dismisses the modal without choosing, or turn ends unresolved
+  // fires when the turn ends with the event still unresolved
   default_outcome: {
     money_delta: number;
     reputation_delta: number;
@@ -97,6 +110,8 @@ export interface BoardItemTemplate {
   key: string;
   type: 'contract_offer' | 'client_request' | 'opportunity' | 'renewal';
   description_template: string;
+  // If present, this decision can only appear while one of these campaign types is active.
+  campaign_type_keys?: string[];
   // minimum Reputation for this item to appear in the generation pool
   rep_gate: number;
   // arc stages of the client that allow this item to be generated
@@ -121,6 +136,8 @@ export interface EconomyConfig {
   agent_stat_upgrade_cost: { money: number; reputation: number };
   roster_slot_upgrade_cost: { money: number };
   defense_track_upgrade_cost: { money: number; per_turn_recurring: number };
+  // "comfortable" entity per_month income for a peak-arc client; scaled by arc income multiplier for other stages
+  income_satisfaction_threshold: number;
 }
 
 // §5.1.9 — arc tuning

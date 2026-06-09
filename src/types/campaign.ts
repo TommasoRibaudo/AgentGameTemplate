@@ -15,14 +15,80 @@ export interface CampaignInstallmentResult {
   triggered_trait_id: string | null;
 }
 
+export type CampaignSize = 'small' | 'medium' | 'large';
+export type ReleaseKind = 'album' | 'single';
+
+export interface ReleaseSong {
+  id: string;
+  title: string;
+  quality: number;
+}
+
+export interface CreativeReleasePlan {
+  kind: ReleaseKind;
+  title: string;
+  songs: ReleaseSong[];
+}
+
+export interface CampaignSetup {
+  size: CampaignSize;
+  length: number;
+  budget: number;
+  payout_multiplier: number;
+  audience_multiplier: number;
+  event_risk_multiplier: number;
+}
+
 export interface Campaign {
   id: string;
   client_id: string;
   // references variant manifest campaign type definition
   type_key: string;
+  setup?: CampaignSetup;
+  release_plan?: CreativeReleasePlan;
   total_turns: number;
   turns_remaining: number;
   installment_results: CampaignInstallmentResult[];
   // contract objective IDs waiting on this campaign's completion to pay out
   pending_objective_ids: string[];
+}
+
+export interface CampaignHistoryItem {
+  id: string;
+  type_key: string;
+  label: string;
+  started_turn: number;
+  completed_turn: number;
+  total_turns: number;
+  setup?: CampaignSetup;
+  installment_results: CampaignInstallmentResult[];
+  release_id: string | null;
+  summary: {
+    money_delta: number;
+    reputation_delta: number;
+    fan_delta: number;
+    album_units_sold?: number;
+    streams?: number;
+    stream_income?: number;
+  };
+  visible_notes: string[];
+}
+
+export interface CatalogRelease {
+  id: string;
+  campaign_id: string;
+  kind: ReleaseKind;
+  type_key: string;
+  title: string;
+  songs: ReleaseSong[];
+  released_turn: number;
+  turns_since_release: number;
+  album_units_sold: number;
+  total_streams: number;
+  album_income_total: number;
+  stream_income_total: number;
+  latest_turn_album_units: number;
+  latest_turn_streams: number;
+  latest_turn_income: number;
+  is_selling_albums: boolean;
 }
