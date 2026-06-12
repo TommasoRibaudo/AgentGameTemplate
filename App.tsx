@@ -15,7 +15,7 @@ function AppRoot() {
   const isRunActive = useIsRunActive();
 
   if (hydrating) {
-    // Blank dark screen while AsyncStorage loads — avoids flash of wrong route.
+    // Blank dark screen while AsyncStorage loads. avoids flash of wrong route.
     return <View style={{ flex: 1, backgroundColor: Colors.bg }} />;
   }
 

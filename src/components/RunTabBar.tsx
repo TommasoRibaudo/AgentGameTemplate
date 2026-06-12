@@ -37,7 +37,6 @@ export function RunTabBar({ state, descriptors, navigation }: BottomTabBarProps)
   const isScoutTutorial        = tutorialStep === 'scout_hint' || tutorialStep === 'scout_signing';
   const isContractApproveTutorial = tutorialStep === 'contract_approve_hint';
   const isAgencyTutorial       = tutorialStep === 'agency_hint';
-
   useEffect(() => {
     if (isContractApproveTutorial) {
       navigation.navigate('Home');
@@ -184,7 +183,7 @@ export function RunTabBar({ state, descriptors, navigation }: BottomTabBarProps)
           <Text style={styles.endTurnHintText}>
             {isContractApproveTutorial
               ? 'Go to your Dashboard and approve the signing contract.'
-              : 'Check your Dashboard — your decision board is ready.'}
+              : 'Check your Dashboard. Your decision board is ready.'}
           </Text>
         </View>
       )}
@@ -194,7 +193,7 @@ export function RunTabBar({ state, descriptors, navigation }: BottomTabBarProps)
           <Text style={styles.endTurnHintText}>
             {tutorialStep === 'scout_hint'
               ? 'Head to the Scout tab and invest in a prospect.'
-              : 'Now sign the prospect — tap Sign on their card.'}
+              : 'Now sign the prospect. Tap Sign on their card.'}
           </Text>
         </View>
       )}
@@ -216,7 +215,7 @@ export function RunTabBar({ state, descriptors, navigation }: BottomTabBarProps)
                 : route.name;
           const isFocused = state.index === index;
           const isHomeHighlighted   = route.name === 'Home'   && (tutorialStep === 'post_gig_hint' || isContractApproveTutorial);
-          const isScoutHighlighted  = route.name === 'Scout'  && isScoutTutorial;
+          const isScoutHighlighted  = route.name === 'Scout'  && isScoutTutorial && !isFocused;
           const isAgencyHighlighted = route.name === 'Agency' && isAgencyTutorial;
           const isTutorialHighlighted = isHomeHighlighted || isScoutHighlighted || isAgencyHighlighted;
           const isPostGigDimmed    = tutorialStep === 'post_gig_hint' && route.name !== 'Home';

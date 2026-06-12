@@ -107,7 +107,12 @@ Run the relevant invariant checks before patching.
 
 Keep debug output intentional.
 
+- **Persistent Bugs:** Detailed logs are mandatory when a bug fix has failed more than twice. Use them to trace state transitions and identify the exact point of failure.
+- **Environment Gating:** Always gate diagnostics and debug logs behind a `DEV`-specific environment variable or a development-only flag.
 - Do not leave noisy unconditional `console.log` calls in production paths.
-- Gate temporary diagnostics behind a dev-only flag or remove them before finishing.
 - Unconditional logs are acceptable for real errors or permanent user-facing diagnostics.
 - Prefer concise, structured messages that identify the feature area and relevant IDs without dumping full state.
+
+## Style & Documentation
+
+- **No Em Dashes:** Do not use em dashes (`—`) anywhere. This includes documentation, commit messages, comments, and especially **user-facing UI text, event descriptions, and creative writing**. Use colons, commas, or standard hyphens (`-`) instead.

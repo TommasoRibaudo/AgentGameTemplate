@@ -9,6 +9,9 @@ import {
   settleCampaignObjectives,
   buildCampaignSetup,
   computeExpectationFanDelta,
+  computeCurrentStreak,
+  computeBestStreak,
+  computeStreakBonus,
   clientMeetsCampaignContractRequirements,
   resolveCampaignCategory,
   deriveCampaignSize,
@@ -1268,6 +1271,272 @@ describe('campaign — startCampaign roster map branch', () => {
     const other  = result.roster.find(c => c.id === otherClient.id);
     expect(target?.active_campaign_id).not.toBeNull();
     expect(other?.active_campaign_id).toBeNull();
+  });
+});
+
+// ─── streak helpers ───────────────────────────────────────────────────────────
+
+const makeGreat = (): CampaignInstallmentResult => ({
+  turn_number: 1, roll_result: 90, outcome_key: 'great',
+  stat_deltas: {}, money_delta: 0, reputation_delta: 3,
+  triggered_event_id: null, triggered_trait_id: null, audience_gain: 0,
+});
+const makeAverage = (): CampaignInstallmentResult => ({
+  turn_number: 1, roll_result: 55, outcome_key: 'average',
+  stat_deltas: {}, money_delta: 0, reputation_delta: 0,
+  triggered_event_id: null, triggered_trait_id: null, audience_gain: 0,
+});
+
+describe('computeCurrentStreak', () => {
+  it('returns 0 for empty results', () => {
+    expect(computeCurrentStreak([])).toBe(0);
+  });
+
+  it('counts trailing consecutive greats', () => {
+    expect(computeCurrentStreak([makeAverage(), makeGreat(), makeGreat(), makeGreat()])).toBe(3);
+  });
+
+  it('resets on a non-great break', () => {
+    expect(computeCurrentStreak([makeGreat(), makeGreat(), makeAverage()])).toBe(0);
+  });
+
+  it('returns full length when all greats', () => {
+    expect(computeCurrentStreak([makeGreat(), makeGreat()])).toBe(2);
+  });
+});
+
+describe('computeBestStreak', () => {
+  it('returns 0 for empty results', () => {
+    expect(computeBestStreak([])).toBe(0);
+  });
+
+  it('finds the longest run when there are multiple runs', () => {
+    const results = [makeGreat(), makeGreat(), makeAverage(), makeGreat(), makeGreat(), makeGreat()];
+    expect(computeBestStreak(results)).toBe(3);
+  });
+
+  it('returns the streak length when all greats', () => {
+    expect(computeBestStreak([makeGreat(), makeGreat(), makeGreat()])).toBe(3);
+  });
+});
+
+describe('computeStreakBonus', () => {
+  it('returns 0 for streak < 2 regardless of arc', () => {
+    expect(computeStreakBonus(0, 'rising')).toBe(0);
+    expect(computeStreakBonus(1, 'rising')).toBe(0);
+    expect(computeStreakBonus(1, 'peak')).toBe(0);
+  });
+
+  it('returns 0 for declining arc at any streak', () => {
+    expect(computeStreakBonus(5, 'declining')).toBe(0);
+  });
+
+  it('rising arc: streak=2 gives 0.12, streak=6 gives capped 0.60', () => {
+    expect(computeStreakBonus(2, 'rising')).toBeCloseTo(0.12);
+    expect(computeStreakBonus(6, 'rising')).toBeCloseTo(0.60);
+    expect(computeStreakBonus(10, 'rising')).toBeCloseTo(0.60); // capped
+  });
+
+  it('peak arc: bonus is much lower than rising for same streak', () => {
+    const rising = computeStreakBonus(4, 'rising');
+    const peak   = computeStreakBonus(4, 'peak');
+    expect(peak).toBeLessThan(rising);
+    expect(computeStreakBonus(10, 'peak')).toBeCloseTo(0.15); // capped
+  });
+});
+
+// ─── advanceCampaigns — streak bonus ─────────────────────────────────────────
+
+describe('advanceCampaigns — streak bonus', () => {
+  const makeGreatClient = (id: string, arcStage: string) =>
+    makeClient({ id, arc_stage: arcStage as any, audience: 10_000, stats: makeClientStats({ form: 100, marketability: 60 }) });
+  const greatCampaignType = makeCampaignType({ form_weight: 1, variance: 0.01, base_payout: 5_000, payout_type: 'per_week' });
+
+  it('no bonus on the first great (streak=1)', () => {
+    const clientId = nextId();
+    const client = makeGreatClient(clientId, 'rising');
+    const manifest = makeManifest({ campaign_types: [greatCampaignType] });
+    const campaign: Campaign = {
+      id: nextId(), client_id: clientId, type_key: 'test_campaign',
+      setup: buildCampaignSetup(greatCampaignType),
+      total_turns: 4, turns_remaining: 4, installment_results: [], pending_objective_ids: [],
+    };
+    const state = makeRunState({ money: 0, roster: [client], campaigns: [campaign] });
+    const after = advanceCampaigns(state, manifest);
+    const stored = after.campaigns[0]?.installment_results[0];
+    // streak=1 → bonus=0, so money_delta should equal roll/100 * base_payout * payout_mult (unscaled)
+    expect(stored?.outcome_key).toBe('great');
+    expect(stored?.money_delta).toBeGreaterThan(0);
+    // Reference: roll≈100, payout_mult≈1, money ≈ 5000; no streak scaling at streak=1
+    expect(after.money).toBeCloseTo(stored!.money_delta, -2);
+  });
+
+  it('streak=2 yields more money and audience than streak=1 for rising arc', () => {
+    const clientId = nextId();
+    const client = makeGreatClient(clientId, 'rising');
+    const manifest = makeManifest({ campaign_types: [greatCampaignType] });
+
+    // Baseline: no prior streak
+    const camp1: Campaign = {
+      id: nextId(), client_id: clientId, type_key: 'test_campaign',
+      setup: buildCampaignSetup(greatCampaignType),
+      total_turns: 4, turns_remaining: 4, installment_results: [], pending_objective_ids: [],
+    };
+    const after1 = advanceCampaigns(makeRunState({ money: 0, roster: [client], campaigns: [camp1] }), manifest);
+    const base = after1.campaigns[0].installment_results[0];
+
+    // With one prior great, streak=2
+    const priorGreat: CampaignInstallmentResult = {
+      turn_number: 1, roll_result: 95, outcome_key: 'great',
+      stat_deltas: {}, money_delta: base.money_delta, reputation_delta: 3,
+      triggered_event_id: null, triggered_trait_id: null, audience_gain: 0,
+    };
+    const camp2: Campaign = {
+      ...camp1, id: nextId(), turns_remaining: 3, installment_results: [priorGreat],
+    };
+    const after2 = advanceCampaigns(makeRunState({ money: 0, roster: [client], campaigns: [camp2] }), manifest);
+    const boosted = after2.campaigns[0].installment_results[1];
+
+    expect(boosted.money_delta).toBeGreaterThan(base.money_delta);
+    expect(after2.money).toBeGreaterThan(after1.money);
+    expect(after2.roster[0].audience).toBeGreaterThan(after1.roster[0].audience);
+  });
+
+  it('no streak bonus for declining arc', () => {
+    const clientId = nextId();
+    const client = makeGreatClient(clientId, 'declining');
+    const manifest = makeManifest({ campaign_types: [greatCampaignType] });
+
+    const priorGreat: CampaignInstallmentResult = {
+      turn_number: 1, roll_result: 95, outcome_key: 'great',
+      stat_deltas: {}, money_delta: 4500, reputation_delta: 3,
+      triggered_event_id: null, triggered_trait_id: null, audience_gain: 0,
+    };
+    // streak=2 but arc=declining → bonus=0
+    const camp: Campaign = {
+      id: nextId(), client_id: clientId, type_key: 'test_campaign',
+      setup: buildCampaignSetup(greatCampaignType),
+      total_turns: 4, turns_remaining: 3, installment_results: [priorGreat], pending_objective_ids: [],
+    };
+    const after = advanceCampaigns(makeRunState({ money: 0, roster: [client], campaigns: [camp] }), manifest);
+    const stored = after.campaigns[0].installment_results[1];
+    // money_delta should match the unscaled value (no bonus)
+    // With form=100, variance=0.01, roll≈100, base=round((100/100)*5000*payout_mult)
+    const setup = buildCampaignSetup(greatCampaignType);
+    const expectedBase = Math.round((100 / 100) * 5_000 * setup.payout_multiplier);
+    expect(stored.money_delta).toBeCloseTo(expectedBase, -2);
+  });
+
+  it('no streak bonus for release campaigns', () => {
+    const clientId = nextId();
+    const client = makeGreatClient(clientId, 'rising');
+    const releaseCampaignType = makeCampaignType({ key: 'album_cycle', release_kind: 'album', form_weight: 1, variance: 0.01, payout_type: 'per_week' });
+    const manifest = makeManifest({ campaign_types: [releaseCampaignType] });
+    const priorGreat: CampaignInstallmentResult = {
+      turn_number: 1, roll_result: 95, outcome_key: 'great',
+      stat_deltas: {}, money_delta: 0, reputation_delta: 3,
+      triggered_event_id: null, triggered_trait_id: null, audience_gain: 0,
+    };
+    const camp: Campaign = {
+      id: nextId(), client_id: clientId, type_key: 'album_cycle',
+      setup: buildCampaignSetup(releaseCampaignType),
+      release_plan: { kind: 'album', title: 'Test', songs: [{ id: 's1', title: 'T', quality: 70 }] },
+      total_turns: 4, turns_remaining: 3, installment_results: [priorGreat], pending_objective_ids: [],
+    };
+    const after = advanceCampaigns(makeRunState({ money: 0, roster: [client], campaigns: [camp] }), manifest);
+    const stored = after.campaigns[0].installment_results[1];
+    // Release campaigns never get streak bonus — money_delta is always 0 for per_week release
+    expect(stored.money_delta).toBe(0);
+  });
+});
+
+// ─── closeCampaign — release streak bonus ────────────────────────────────────
+
+describe('closeCampaign — release streak bonus', () => {
+  const makeReleaseCampaignWithStreak = (
+    clientId: string,
+    arcStage: string,
+    streakLength: number,
+    baseQuality: number,
+  ) => {
+    const campaignType = makeCampaignType({ key: 'album_cycle', release_kind: 'album' });
+    const campaignId = nextId();
+    const installments: CampaignInstallmentResult[] = Array.from({ length: streakLength }, (_, i) => ({
+      turn_number: i + 1, roll_result: 90, outcome_key: 'great',
+      stat_deltas: {}, money_delta: 0, reputation_delta: 3,
+      triggered_event_id: null, triggered_trait_id: null, audience_gain: 0,
+    }));
+    const campaign: Campaign = {
+      id: campaignId,
+      client_id: clientId,
+      type_key: 'album_cycle',
+      setup: buildCampaignSetup(campaignType),
+      release_plan: { kind: 'album', title: 'Test Album', songs: [{ id: 's1', title: 'Song', quality: baseQuality }] },
+      total_turns: streakLength,
+      turns_remaining: 0,
+      installment_results: installments,
+      pending_objective_ids: [],
+    };
+    // active_campaign_id must match so closeCampaign can locate and update the client
+    const client = makeClient({ id: clientId, arc_stage: arcStage as any, active_campaign_id: campaignId });
+    const manifest = makeManifest({ campaign_types: [campaignType] });
+    return { campaign, client, manifest };
+  };
+
+  it('streak < 2 gives no quality boost', () => {
+    const clientId = nextId();
+    const { campaign, client, manifest } = makeReleaseCampaignWithStreak(clientId, 'rising', 1, 60);
+    const state = makeRunState({ roster: [client], campaigns: [campaign] });
+    const after = closeCampaign(state, campaign.id, manifest);
+    const release = after.roster.find(c => c.id === clientId)!.catalog_releases?.[0];
+    expect(release!.songs[0].quality).toBe(60);
+  });
+
+  it('rising arc streak boosts song quality', () => {
+    const clientId = nextId();
+    const { campaign, client, manifest } = makeReleaseCampaignWithStreak(clientId, 'rising', 4, 60);
+    const state = makeRunState({ roster: [client], campaigns: [campaign] });
+    const after = closeCampaign(state, campaign.id, manifest);
+    const release = after.roster.find(c => c.id === clientId)!.catalog_releases?.[0];
+    expect(release!.songs[0].quality).toBeGreaterThan(60);
+  });
+
+  it('peak arc boost is lower than rising arc boost for the same streak', () => {
+    const baseQuality = 60;
+    const streakLength = 5;
+
+    const risingId = nextId();
+    const { campaign: risingCamp, client: risingClient, manifest } =
+      makeReleaseCampaignWithStreak(risingId, 'rising', streakLength, baseQuality);
+    const risingAfter = closeCampaign(makeRunState({ roster: [risingClient], campaigns: [risingCamp] }), risingCamp.id, manifest);
+    const risingQuality = risingAfter.roster.find(c => c.id === risingId)!.catalog_releases![0].songs[0].quality;
+
+    const peakId = nextId();
+    const { campaign: peakCamp, client: peakClient } =
+      makeReleaseCampaignWithStreak(peakId, 'peak', streakLength, baseQuality);
+    const peakAfter = closeCampaign(makeRunState({ roster: [peakClient], campaigns: [peakCamp] }), peakCamp.id, manifest);
+    const peakQuality = peakAfter.roster.find(c => c.id === peakId)!.catalog_releases![0].songs[0].quality;
+
+    expect(peakQuality).toBeGreaterThan(baseQuality);
+    expect(risingQuality).toBeGreaterThan(peakQuality);
+  });
+
+  it('declining arc gives no quality boost regardless of streak', () => {
+    const clientId = nextId();
+    const { campaign, client, manifest } = makeReleaseCampaignWithStreak(clientId, 'declining', 6, 70);
+    const state = makeRunState({ roster: [client], campaigns: [campaign] });
+    const after = closeCampaign(state, campaign.id, manifest);
+    const release = after.roster.find(c => c.id === clientId)!.catalog_releases?.[0];
+    expect(release!.songs[0].quality).toBe(70);
+  });
+
+  it('boosted quality is capped at 100', () => {
+    const clientId = nextId();
+    const { campaign, client, manifest } = makeReleaseCampaignWithStreak(clientId, 'rising', 10, 99);
+    const state = makeRunState({ roster: [client], campaigns: [campaign] });
+    const after = closeCampaign(state, campaign.id, manifest);
+    const release = after.roster.find(c => c.id === clientId)!.catalog_releases?.[0];
+    expect(release!.songs[0].quality).toBeLessThanOrEqual(100);
   });
 });
 

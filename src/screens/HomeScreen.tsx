@@ -254,7 +254,7 @@ export function HomeScreen() {
                       isPushEnabled={runState.agent.stats.negotiation > 0}
                       previousContract={previousContract}
                       isTutorial={isTutorial}
-                      onResolve={resolveDecision}
+                      onResolve={(id, key) => resolveDecision(id, key)}
                       onOpenCounter={handleOpenCounter}
                     />
                   );

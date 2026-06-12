@@ -226,7 +226,7 @@ function ResultView({
       symbolColor: Colors.warning,
       headline: 'Revised',
       headlineColor: Colors.warning,
-      body: 'They moved partway toward your terms. Review the updated offer — you can approve it, reject it, or counter again.',
+      body: 'They moved partway toward your terms. Review the updated offer: you can approve it, reject it, or counter again.',
     },
     rejected: {
       symbol: '✗',

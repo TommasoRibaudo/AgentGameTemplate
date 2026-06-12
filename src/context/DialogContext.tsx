@@ -23,7 +23,7 @@ const DialogContext = createContext<DialogContextValue | null>(null);
 export function DialogProvider({ children }: { children: React.ReactNode }) {
   const [opts, setOpts] = useState<DialogOptions | null>(null);
 
-  const showDialog = useCallback((options: DialogOptions) => setOpts(options), []);
+  const showDialog = useCallback((options: DialogOptions) => { setOpts(options); }, []);
 
   function dismiss() {
     setOpts(null);

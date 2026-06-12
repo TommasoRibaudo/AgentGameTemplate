@@ -132,6 +132,38 @@ const normalRandom = (mean: number, stdDev: number): number => {
 const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value));
 
+// Returns the length of the trailing consecutive run of 'great' outcomes.
+export const computeCurrentStreak = (results: CampaignInstallmentResult[]): number => {
+  let streak = 0;
+  for (let i = results.length - 1; i >= 0; i--) {
+    if (results[i].outcome_key !== 'great') break;
+    streak++;
+  }
+  return streak;
+};
+
+// Returns the longest consecutive run of 'great' outcomes across all results.
+export const computeBestStreak = (results: CampaignInstallmentResult[]): number => {
+  let best = 0, current = 0;
+  for (const r of results) {
+    current = r.outcome_key === 'great' ? current + 1 : 0;
+    if (current > best) best = current;
+  }
+  return best;
+};
+
+// Arc-gated streak bonus: fractional multiplier applied when streak >= 2.
+// Rising gets the strongest reward because momentum matters most early in a career.
+const STREAK_RATE: Record<string, number> = { rising: 0.12, peak: 0.04, declining: 0 };
+const STREAK_CAP:  Record<string, number> = { rising: 0.60, peak: 0.15, declining: 0 };
+
+export const computeStreakBonus = (streak: number, arcStage: string): number => {
+  if (streak < 2) return 0;
+  const rate = STREAK_RATE[arcStage] ?? 0;
+  const cap  = STREAK_CAP[arcStage]  ?? 0;
+  return Math.min((streak - 1) * rate, cap);
+};
+
 const computeFanMarketabilityBonus = (audience: number): number =>
   clamp((Math.log10(Math.max(100, audience)) - 4) * 8, -8, 20);
 
@@ -548,13 +580,23 @@ export const advanceCampaigns: AdvanceCampaigns = (state, manifest) => {
     const setup = getCampaignSetup(campaign, typeDef);
     const result = rollInstallment(s, campaign.id, manifest);
 
+    // Consecutive-great streak bonus (installment campaigns only; 0 for releases or non-great outcomes)
+    const isRelease = isReleaseCampaign(typeDef);
+    const streakBonus = (!isRelease && result.outcome_key === 'great')
+      ? computeStreakBonus(
+          computeCurrentStreak(campaign.installment_results) + 1,
+          s.roster.find(c => c.id === campaign.client_id)?.arc_stage ?? 'rising',
+        )
+      : 0;
+
     // Apply stat deltas to client
     const client = s.roster.find(c => c.id === campaign.client_id);
     let audienceGain = 0;
     if (client) {
-      audienceGain = isReleaseCampaign(typeDef)
+      const rawAudienceGain = isRelease
         ? 0
         : computeAudienceGain(client.audience, result.roll_result, client.stats.marketability.true_value, setup.audience_multiplier);
+      audienceGain = streakBonus > 0 ? Math.round(rawAudienceGain * (1 + streakBonus)) : rawAudienceGain;
       const updatedStats = Object.keys(result.stat_deltas).length > 0
         ? applyClientStatDeltas(client, result.stat_deltas, s.agent)
         : client;
@@ -562,20 +604,29 @@ export const advanceCampaigns: AdvanceCampaigns = (state, manifest) => {
       s = { ...s, roster: s.roster.map(c => c.id === client.id ? updated : c) };
     }
 
-    // Apply money/rep deltas
+    // Apply money/rep deltas, scaled up for active great streaks
+    const scaledMoneyDelta = streakBonus > 0 && result.money_delta > 0
+      ? Math.round(result.money_delta * (1 + streakBonus))
+      : result.money_delta;
+    const scaledRepDelta = streakBonus > 0 && result.reputation_delta > 0
+      ? Math.round(result.reputation_delta * (1 + streakBonus))
+      : result.reputation_delta;
     s = {
       ...s,
-      money:           Math.max(0, s.money + result.money_delta),
-      reputation:      Math.max(0, Math.min(100, s.reputation + result.reputation_delta)),
-      total_earnings:  result.money_delta > 0 ? s.total_earnings + result.money_delta : s.total_earnings,
+      money:           Math.max(0, s.money + scaledMoneyDelta),
+      reputation:      Math.max(0, Math.min(100, s.reputation + scaledRepDelta)),
+      total_earnings:  scaledMoneyDelta > 0 ? s.total_earnings + scaledMoneyDelta : s.total_earnings,
       peak_reputation: Math.max(s.peak_reputation, s.reputation),
     };
 
-    // Append installment result and tick down
+    // Append installment result and tick down (store streak-scaled values for accurate history summary)
     const updatedCampaign: Campaign = {
       ...campaign,
       turns_remaining:     campaign.turns_remaining - 1,
-      installment_results: [...campaign.installment_results, { ...result, audience_gain: audienceGain }],
+      installment_results: [
+        ...campaign.installment_results,
+        { ...result, money_delta: scaledMoneyDelta, reputation_delta: scaledRepDelta, audience_gain: audienceGain },
+      ],
     };
 
     s = { ...s, campaigns: s.campaigns.map(c => c.id === campaign.id ? updatedCampaign : c) };
@@ -739,6 +790,11 @@ export const closeCampaign: CloseCampaign = (state, campaignId, manifest) => {
   const typeDef = manifest.campaign_types.find(t => t.key === campaign.type_key);
   const label = typeDef?.label ?? campaign.type_key.replace(/_/g, ' ');
   const releaseId = campaign.release_plan ? `rel_${generateId()}` : null;
+  const releaseArcStage = s.roster.find(c => c.active_campaign_id === campaignId)?.arc_stage;
+  const bestStreak = computeBestStreak(campaign.installment_results);
+  const releaseStreakBonus = (campaign.release_plan && releaseArcStage)
+    ? computeStreakBonus(bestStreak, releaseArcStage)
+    : 0;
   const release: CatalogRelease | null = campaign.release_plan && releaseId
     ? {
         id: releaseId,
@@ -746,7 +802,12 @@ export const closeCampaign: CloseCampaign = (state, campaignId, manifest) => {
         kind: campaign.release_plan.kind,
         type_key: campaign.type_key,
         title: campaign.release_plan.title,
-        songs: campaign.release_plan.songs,
+        songs: releaseStreakBonus > 0
+          ? campaign.release_plan.songs.map(song => ({
+              ...song,
+              quality: Math.round(clamp(song.quality * (1 + releaseStreakBonus), 1, 100)),
+            }))
+          : campaign.release_plan.songs,
         released_turn: s.turn_number,
         turns_since_release: 0,
         album_units_sold: 0,
@@ -793,7 +854,7 @@ export const closeCampaign: CloseCampaign = (state, campaignId, manifest) => {
     expectationFanDelta > 0
       ? `${expectationFanDelta.toLocaleString()} new fans won over — campaign exceeded expectations.`
       : expectationFanDelta < 0
-      ? `${Math.abs(expectationFanDelta).toLocaleString()} fans lost — campaign fell short of expectations.`
+      ? `Campaign underperformed.`
       : null;
 
   const talentDelta = client

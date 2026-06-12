@@ -22,6 +22,21 @@ import { RENEWAL_NOTICE_TURNS } from '../engine/decision-queue';
 import { CLIENT_BOOST_AMOUNT, CLIENT_BOOST_COST } from '../engine/progression';
 import { Colors, FontSize, Spacing, Radius, ArcColors, formatMoney, formatAge } from '../theme';
 
+// Interpolates textPrimary → warning (gold) as the great-streak grows.
+// Full gold is reached at STREAK_GOLD_MAX, matching the rising-arc streak cap.
+const STREAK_GOLD_MAX = 6;
+const STREAK_BASE_R = 240, STREAK_BASE_G = 239, STREAK_BASE_B = 248; // #F0EFF8
+const STREAK_GOLD_R = 240, STREAK_GOLD_G = 168, STREAK_GOLD_B =  51; // #F0A833
+
+function streakTextColor(streak: number): string {
+  if (streak <= 0) return Colors.textPrimary;
+  const t = Math.min(streak / STREAK_GOLD_MAX, 1.0);
+  const r = Math.round(STREAK_BASE_R + t * (STREAK_GOLD_R - STREAK_BASE_R));
+  const g = Math.round(STREAK_BASE_G + t * (STREAK_GOLD_G - STREAK_BASE_G));
+  const b = Math.round(STREAK_BASE_B + t * (STREAK_GOLD_B - STREAK_BASE_B));
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 export type ClientDetailScreenProps = NativeStackScreenProps<RosterStackParamList, 'ClientDetail'>;
 
 type Tab = 'overview' | 'stats' | 'contracts' | 'campaign';
@@ -643,18 +658,27 @@ function CampaignTab({
       <Section title="Installment History">
         {activeCampaign.installment_results.length === 0 ? (
           <Text style={styles.noContract}>Campaign just started.</Text>
-        ) : (
-          activeCampaign.installment_results.map((r: any, i: number) => (
+        ) : (() => {
+          // Precompute streak length at each position (consecutive greats ending here)
+          const streaks = activeCampaign.installment_results.map((r: any, i: number) => {
+            if (r.outcome_key !== 'great') return 0;
+            let s = 0;
+            for (let j = i; j >= 0 && activeCampaign.installment_results[j].outcome_key === 'great'; j--) s++;
+            return s;
+          });
+          return activeCampaign.installment_results.map((r: any, i: number) => (
             <View key={i} style={styles.installmentRow}>
               <Text style={styles.installmentTurn}>W{r.turn_number}</Text>
-              <Text style={styles.installmentKey}>{r.outcome_key.replace(/_/g, ' ')}</Text>
+              <Text style={[styles.installmentKey, { color: streakTextColor(streaks[i]) }]}>
+                {r.outcome_key.replace(/_/g, ' ')}
+              </Text>
               {r.audience_gain > 0 && (
                 <Text style={styles.installmentDelta}>+{r.audience_gain.toLocaleString()} fans</Text>
               )}
               <DeltaText value={r.money_delta} kind="money" style={styles.installmentDelta} />
             </View>
-          ))
-        )}
+          ));
+        })()}
       </Section>
       <CatalogSection client={client} />
       <CampaignHistorySection client={client} />

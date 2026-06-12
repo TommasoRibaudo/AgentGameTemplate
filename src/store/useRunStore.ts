@@ -159,7 +159,7 @@ export const useRunStore = create<RunStore>((set, get) => {
             client_id:         next.tutorial_friend_id,
             contract_id:       null,
             contract_draft:    null,
-            description:       "Dev's first gig went well! Each week you'll find board items like this — resolve them to shape your clients' careers.",
+            description:       "Dev's first gig went well! Each week you'll find board items like this. Resolve them to shape your clients' careers.",
             options: [
               {
                 key:       'approve',
@@ -189,7 +189,7 @@ export const useRunStore = create<RunStore>((set, get) => {
             client_id:         state.tutorial_friend_id,
             contract_id:       null,
             contract_draft:    null,
-            description:       "Dev's first gig is in the books. Each week you'll find board items like this — resolve them to shape your clients' careers.",
+            description:       "Dev's first gig went well! Each week you'll find board items like this. Resolve them to shape your clients' careers.",
             options: [
               {
                 key:       'approve',
@@ -564,14 +564,14 @@ export const useRunStore = create<RunStore>((set, get) => {
 
       const step = state.tutorial_step;
 
-      // Gig started but new scout/agency tutorial hasn't begun — terminate cleanly, keep state
-      if (step === 'end_turn_hint' || step === 'post_gig_hint') {
+      // Gig in progress but end-turn hasn't fired yet — terminate cleanly, keep state
+      if (step === 'end_turn_hint') {
         set(store => store.state ? { state: { ...store.state, tutorial_step: 'done' as TutorialStep } } : {});
         return;
       }
 
-      // scout_hint / scout_signing / contract_approve_hint / agency_hint — resume normally
-      if (step === 'scout_hint' || step === 'scout_signing' || step === 'contract_approve_hint' || step === 'agency_hint') return;
+      // post_gig_hint / scout_hint / scout_signing / contract_approve_hint / agency_hint — resume normally
+      if (step === 'post_gig_hint' || step === 'scout_hint' || step === 'scout_signing' || step === 'contract_approve_hint' || step === 'agency_hint') return;
 
       // Pre-gig (roster_highlight / campaign_tab / gig_hint): remove Dev Reyes and restart from friend_pitch
       const friendId    = state.tutorial_friend_id;

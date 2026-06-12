@@ -6,10 +6,7 @@ import {
 import * as Clipboard from 'expo-clipboard';
 import { useDialog } from '../context/DialogContext';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { useNavigation } from '@react-navigation/native';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { TabParamList } from '../navigation/types';
-import { RootParamList } from '../navigation/types';
 import {
   useRunState, useManifest, useMoney, useReputation,
   useTurnNumber, useAgentState, useDebtState, useRunStore,
@@ -48,7 +45,6 @@ const INFRA_DESCS: Record<InfrastructureUpgradeKey, string> = {
 };
 
 export function AgencyScreen() {
-  const rootNav  = useNavigation<NativeStackNavigationProp<RootParamList>>();
   const runState = useRunState();
   const manifest = useManifest();
   const money    = useMoney();
@@ -103,10 +99,6 @@ export function AgencyScreen() {
         {
           label: 'Retire', style: 'destructive', onPress: () => {
             retireVoluntarily();
-            const state = useRunStore.getState().state;
-            if (state?.end_condition) {
-              rootNav.navigate('CareerSummary', { runId: state.id });
-            }
           },
         },
       ],

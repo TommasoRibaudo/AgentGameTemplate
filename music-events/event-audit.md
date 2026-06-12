@@ -375,7 +375,7 @@ options: [
 default_outcome: { money_delta: -5000, reputation_delta: -5, stat_deltas: { morale: -5, form: -5 } },
 
 // AFTER
-description_template: "{client_name} has been hospitalised. Fans are waiting — every hour of silence costs.",
+description_template: "{client_name} has been hospitalised. Fans are waiting impatiently.",
 options: [
   { key: 'release_statement', label: 'Release a Statement', outcome: { money_delta: -5000, reputation_delta: -1, stat_deltas: { morale:  2 } } },
   { key: 'no_comment',        label: 'Stay Silent',         outcome: { money_delta:     0, reputation_delta: -3, stat_deltas: { morale: -2, marketability: 1 } } },
@@ -401,7 +401,7 @@ options: [
 ],
 
 // AFTER
-description_template: "{client_name} is at the center of a breaking scandal — the window to respond is closing fast.",
+description_template: "{client_name} is at the center of a breaking scandal and the window to respond is closing fast.",
 options: [
   { key: 'crisis_pr',           label: 'Hire a Crisis PR Team',  outcome: { money_delta: -5000, reputation_delta: -2, stat_deltas: { marketability: -2, morale:  1 } } },
   { key: 'deny',                label: 'Deny Everything',        outcome: { money_delta:     0, reputation_delta: -5, stat_deltas: { marketability: -3, morale:  2 } } },

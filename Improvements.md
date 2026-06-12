@@ -95,7 +95,7 @@
 - [x] recruit signing rework (they accept whatever, its really easy to get them to sign incredibly bad contracts)
 - [x] agency actions (Manager skills and infrastructure upgrades) should show up on the expenses under a specific category 
 - [x] while in client's detail, if you have interacted with a campaign, getting ready for it, and then you click away to maybe check the stat tab, you completely lose what you had done
-- [ ] campaign initial expenses do not show up in the expenses category in income / expenses in dashboard
+- [x] campaign initial expenses do not show up in the expenses category in income / expenses in dashboard
 - [x] does you contract % impact how much you gain from campaigns?
 - [ ] i fired somebody but I think I got a notification of their contract expiring weeks later
 - [ ] instead of W34 for dates (completed gigs for example) put the date 
@@ -109,9 +109,9 @@
 - [ ] the offer contract decision should come with the portrait of the client
 - [ ] how does morale impact installments? how does it interact with contract renewal and posture?
 - [ ] morale tends to be very low and form and marketability very high, analyze reasons. Morale should go up as you do not do anything with the artist (that also gives the client to propose a campaign through decisions)
-- [ ] when the tutorial is interrupted, restart it on startup (remember to remove dev reyes) - if dev reyes already started the gig, just let the tutorial just instaterminate when restarting the app. you keep reyes and the gig and the game starts
-- [ ] the tutorial should move on to explain scout. makes you scout, then sign somebody (this person asks for 0 dollars per week no matter what)
-- [ ] move on to explaining agency and upgrades and bank quickly. 
+- [x] when the tutorial is interrupted, restart it on startup (remember to remove dev reyes) - if dev reyes already started the gig, just let the tutorial just instaterminate when restarting the app. you keep reyes and the gig and the game starts
+- [x] the tutorial should move on to explain scout. makes you scout, then sign somebody (this person asks for 0 dollars per week no matter what)
+- [x] move on to explaining agency and upgrades and bank quickly. 
 - [ ] slow down new recruits generation, improve skills or infra to improve chances of new recruits. 
 - [x] when you release an record campaign result get a summary of the name, details and quality.
 - [ ] consider having a "breakthrough record campaign" album is so good you sell 10 times and get 10 times more fans
@@ -119,6 +119,7 @@
 - [ ] add credits for mono portrait pack
 - [ ] search for a font
 - [ ] when doing albums and tours, no longer mixtapes and gigs, be able to invest up to 24 weeks max
+- [ ] when creating a new artist, avoid using the same portrait as artist on the scout list (priority), roster (not a priority, especially when it cannot be done)
 
 - [+++] news rework (i dont even know what they are telling me) and the order is reversed, it needs to go from newest to oldest (and it also loads all of the news at once when expanding the news tab)
 - [+++] monetization tab (in agency, below bank): mention who you are and that you understand monetization suck, just be nice and ask confidently if they want to support my work to: watch an ad to get a cash injection, pay for a cash injection, or have a feature bounty system with variants offered, features to add. if the bounty is 100 dollars, you can still donate 1 dollar and it shows up in the counter.
