@@ -20,6 +20,8 @@ const makeDraft = (overrides?: Partial<ContractDraft>): ContractDraft => ({
   },
   default_on_ignore: 'reject',
   expires_in: 2,
+  exclusivity_scope: null,
+  album_option: null,
   ...overrides,
 });
 

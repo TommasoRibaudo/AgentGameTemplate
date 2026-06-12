@@ -1,18 +1,21 @@
 import React from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, SafeAreaView, Alert,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, SafeAreaView, Image,
 } from 'react-native';
+import { resolvePortrait } from '../portraits';
+import { useDialog } from '../context/DialogContext';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { ScoutStackParamList } from '../navigation/types';
 import {
   useRunState, useManifest, useMoney, useReputation,
   useTurnNumber, useRunStore,
+  useTutorialStep, useTutorialProspectId,
 } from '../store/useRunStore';
 import { TopBar }  from '../components/TopBar';
 import { FogBand } from '../components/FogBand';
 import { canInvestScouting } from '../engine/client';
 import { CoreStatKey } from '../types/primitives';
-import { Colors, FontSize, Spacing, Radius, ArcColors } from '../theme';
+import { Colors, FontSize, Spacing, Radius, ArcColors, formatAge } from '../theme';
 
 export type ProspectDetailScreenProps = NativeStackScreenProps<ScoutStackParamList, 'ProspectDetail'>;
 
@@ -29,6 +32,14 @@ export function ProspectDetailScreen({ route, navigation }: ProspectDetailScreen
 
   const investScouting    = useRunStore(s => s.investScouting);
   const queueSigningOffer = useRunStore(s => s.queueSigningOffer);
+  const advanceTutorial   = useRunStore(s => s.advanceTutorial);
+  const tutorialStep       = useTutorialStep();
+  const tutorialProspectId = useTutorialProspectId();
+  const { showDialog }    = useDialog();
+
+  const isTutorialProspect =
+    (tutorialStep === 'scout_hint' || tutorialStep === 'scout_signing') &&
+    prospectId === tutorialProspectId;
 
   const prospect   = runState?.prospects.find(p => p.id === prospectId);
   const rosterFull = (runState?.roster.length ?? 0) >= (runState?.agent.roster_capacity ?? 0);
@@ -50,12 +61,19 @@ export function ProspectDetailScreen({ route, navigation }: ProspectDetailScreen
   function handleInvest(statKey: CoreStatKey) {
     if (!canAfford) return;
     investScouting(prospectId, statKey, SCOUT_COST);
+    if (tutorialStep === 'scout_hint' && isTutorialProspect) {
+      advanceTutorial('scout_hint');
+    }
   }
 
   function handleSign() {
     if (rosterFull) return;
     queueSigningOffer(prospectId);
-    Alert.alert('Offer queued', 'Check your Decision Board to approve the signing.');
+    if (isTutorialProspect) {
+      navigation.goBack();
+      return;
+    }
+    showDialog({ title: 'Offer queued', message: 'Check your Decision Board to approve the signing.' });
     navigation.goBack();
   }
 
@@ -79,8 +97,18 @@ export function ProspectDetailScreen({ route, navigation }: ProspectDetailScreen
       />
 
       <ScrollView contentContainerStyle={styles.scroll}>
+        {isTutorialProspect && (
+          <View style={styles.tutorialBanner}>
+            <Text style={styles.tutorialBannerText}>
+              {tutorialStep === 'scout_hint'
+                ? 'Tap Scout on a stat to reveal more about this artist.'
+                : 'Now sign them — they\'re asking for nothing.'}
+            </Text>
+          </View>
+        )}
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <View style={styles.header}>
+          <Image source={resolvePortrait(prospect.portrait, prospect.id)} style={styles.portrait} />
           <View style={styles.headerLeft}>
             <Text style={styles.name}>{prospect.name}</Text>
             <View style={[styles.arcBadge, { borderColor: arcColor }]}>
@@ -105,6 +133,10 @@ export function ProspectDetailScreen({ route, navigation }: ProspectDetailScreen
             <Text style={styles.audienceLabel}>{labels.audience}</Text>
             <Text style={styles.audienceValue}>{prospect.audience.toLocaleString()}</Text>
           </View>
+          <View style={styles.audienceRow}>
+            <Text style={styles.audienceLabel}>Age</Text>
+            <Text style={styles.audienceValue}>{formatAge(prospect.age_weeks)}</Text>
+          </View>
           <View style={styles.progressBar}>
             <View style={[styles.progressFill, { width: `${fogPct}%` as any }]} />
           </View>
@@ -122,7 +154,7 @@ export function ProspectDetailScreen({ route, navigation }: ProspectDetailScreen
                 <View key={key} style={styles.statRow}>
                   <FogBand label={statLabels[key]} stat={prospect.stats[key]} size="compact" />
                   <TouchableOpacity
-                    style={[styles.scoutBtn, scoutDisabled && styles.btnDisabled]}
+                    style={[styles.scoutBtn, scoutDisabled && styles.btnDisabled, isTutorialProspect && tutorialStep === 'scout_hint' && !scoutDisabled && styles.scoutBtnTutorial]}
                     onPress={() => handleInvest(key)}
                     disabled={scoutDisabled}
                     accessibilityRole="button"
@@ -141,7 +173,6 @@ export function ProspectDetailScreen({ route, navigation }: ProspectDetailScreen
           )}
         </View>
 
-        {/* ── Traits ─────────────────────────────────────────────────────── */}
         {/* ── Sign CTA ───────────────────────────────────────────────────── */}
         <View style={styles.ctaSection}>
           {rosterFull && (
@@ -150,7 +181,7 @@ export function ProspectDetailScreen({ route, navigation }: ProspectDetailScreen
             </Text>
           )}
           <TouchableOpacity
-            style={[styles.signBtn, rosterFull && styles.btnDisabled]}
+            style={[styles.signBtn, rosterFull && styles.btnDisabled, isTutorialProspect && tutorialStep === 'scout_signing' && styles.signBtnTutorial]}
             onPress={handleSign}
             disabled={rosterFull}
             accessibilityRole="button"
@@ -176,8 +207,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
+    gap: Spacing.md,
   },
-  headerLeft: { gap: Spacing.xs },
+  portrait: {
+    width: 64,
+    height: 64,
+  },
+  headerLeft: { gap: Spacing.xs, flex: 1 },
   name: {
     color: Colors.textPrimary,
     fontSize: FontSize.xl,
@@ -230,6 +266,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.sm,
   },
+  tutorialBanner: {
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+    padding: Spacing.md,
+  },
+  tutorialBannerText: {
+    color: Colors.warning,
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
   scoutBtn: {
     backgroundColor: Colors.surfaceRaised,
     borderRadius: Radius.sm,
@@ -237,6 +286,10 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     paddingHorizontal: Spacing.sm,
     paddingVertical: Spacing.xs,
+  },
+  scoutBtnTutorial: {
+    backgroundColor: Colors.warning,
+    borderColor: Colors.warning,
   },
   scoutBtnText: { color: Colors.textSecondary, fontSize: FontSize.xs, fontWeight: '600' },
   cantAfford:   { color: Colors.warning, fontSize: FontSize.xs },
@@ -252,6 +305,14 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     paddingVertical: Spacing.md,
     alignItems: 'center',
+  },
+  signBtnTutorial: {
+    backgroundColor: Colors.warning,
+    shadowColor: Colors.warning,
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 6,
   },
   signBtnText: { color: Colors.textPrimary, fontSize: FontSize.md, fontWeight: '700' },
   btnDisabled: { opacity: 0.4 },

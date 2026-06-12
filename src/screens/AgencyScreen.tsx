@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  SafeAreaView, Alert, TextInput,
+  SafeAreaView, TextInput,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import { useDialog } from '../context/DialogContext';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -11,6 +13,7 @@ import { RootParamList } from '../navigation/types';
 import {
   useRunState, useManifest, useMoney, useReputation,
   useTurnNumber, useAgentState, useDebtState, useRunStore,
+  useTutorialStep,
 } from '../store/useRunStore';
 import { TopBar } from '../components/TopBar';
 import { InfrastructureUpgradeKey } from '../engine/progression';
@@ -21,11 +24,12 @@ import {
 import { computeCreditCeiling, computeCreditHeadroom } from '../engine/failure';
 import { Colors, FontSize, Spacing, Radius, formatMoney } from '../theme';
 import { AgentStats } from '../types/agent';
+import { buildDebugStatus } from '../dev/debugStatus';
 
 export type AgencyScreenProps = NativeStackScreenProps<TabParamList, 'Agency'>;
 
 const AGENT_STAT_DESCS: Record<keyof AgentStats, string> = {
-  stat_scouting:    'Narrows talent fog bands on scouting',
+  stat_scouting:    'Narrows talent fog bands; each level adds 10% chance to find a new prospect per turn (base 30%, max 90%)',
   insight_scouting: 'Narrows form, marketability, and morale fog bands',
   negotiation:      'Improves contract terms and reveals posture',
   operations:       'Lowers overhead and client costs',
@@ -35,7 +39,7 @@ const AGENT_STAT_DESCS: Record<keyof AgentStats, string> = {
 const INFRA_DESCS: Record<InfrastructureUpgradeKey, string> = {
   roster_slot:       'Increase max roster capacity (+1)',
   insurance:         'Reduces frequency of client health events',
-  pr:                'Reduces frequency of PR/reputation events',
+  pr:                'Reduces frequency of public-image events',
   legal:             'Reduces frequency of legal events',
   medical:           'Reduces frequency of medical events',
   training_facility: 'Improves form and sharpens talent/form scouting',
@@ -54,11 +58,16 @@ export function AgencyScreen() {
   const debt     = useDebtState();
 
   const [loanInput, setLoanInput] = useState('');
+  const [debugCopied, setDebugCopied] = useState(false);
+  const { showDialog } = useDialog();
 
-  const upgradeAgentStat      = useRunStore(s => s.upgradeAgentStat);
-  const upgradeInfrastructure = useRunStore(s => s.upgradeInfrastructure);
-  const takeLoan              = useRunStore(s => s.takeLoan);
-  const retireVoluntarily     = useRunStore(s => s.retireVoluntarily);
+  const tutorialStep            = useTutorialStep();
+  const advanceTutorial         = useRunStore(s => s.advanceTutorial);
+  const upgradeAgentStat        = useRunStore(s => s.upgradeAgentStat);
+  const upgradeInfrastructure   = useRunStore(s => s.upgradeInfrastructure);
+  const downgradeInfrastructure = useRunStore(s => s.downgradeInfrastructure);
+  const takeLoan                = useRunStore(s => s.takeLoan);
+  const retireVoluntarily       = useRunStore(s => s.retireVoluntarily);
 
   if (!runState || !manifest || !agent) {
     return (
@@ -83,16 +92,16 @@ export function AgencyScreen() {
 
   function handleRetire() {
     if (phase !== 'decision') {
-      Alert.alert('Wrong phase', 'You can only retire during the Decision phase.');
+      showDialog({ title: 'Wrong phase', message: 'You can only retire during the Decision phase.' });
       return;
     }
-    Alert.alert(
-      'Retire now?',
-      'Lock in your career score? This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
+    showDialog({
+      title: 'Retire now?',
+      message: 'Lock in your career score? This cannot be undone.',
+      buttons: [
+        { label: 'Cancel', style: 'cancel' },
         {
-          text: 'Retire', style: 'destructive', onPress: () => {
+          label: 'Retire', style: 'destructive', onPress: () => {
             retireVoluntarily();
             const state = useRunStore.getState().state;
             if (state?.end_condition) {
@@ -101,17 +110,17 @@ export function AgencyScreen() {
           },
         },
       ],
-    );
+    });
   }
 
   function handleTakeLoan() {
     const amount = parseInt(loanInput, 10);
     if (isNaN(amount) || amount <= 0) {
-      Alert.alert('Invalid amount', 'Enter a positive number.');
+      showDialog({ title: 'Invalid amount', message: 'Enter a positive number.' });
       return;
     }
     if (amount > creditHeadroom) {
-      Alert.alert('No credit available', `You can borrow up to ${formatMoney(creditHeadroom)} right now.`);
+      showDialog({ title: 'No credit available', message: `You can borrow up to ${formatMoney(creditHeadroom)} right now.` });
       return;
     }
     const before = useRunStore.getState().state;
@@ -119,10 +128,25 @@ export function AgencyScreen() {
     const after = useRunStore.getState().state;
     setLoanInput('');
     if (after && before && after.money > before.money && after.debt.balance > before.debt.balance) {
-      Alert.alert('Loan approved', `${formatMoney(amount)} added to your balance.`);
+      showDialog({ title: 'Loan approved', message: `${formatMoney(amount)} added to your balance.` });
     } else {
-      Alert.alert('Loan unavailable', 'Your current credit headroom is not enough for that loan.');
+      showDialog({ title: 'Loan unavailable', message: 'Your current credit headroom is not enough for that loan.' });
     }
+  }
+
+  async function handleCopyDebugStatus() {
+    const snapshot = useRunStore.getState();
+    if (!snapshot.state || !snapshot.manifest) return;
+
+    const didCopy = await Clipboard.setStringAsync(buildDebugStatus(snapshot.state, snapshot.manifest));
+    setDebugCopied(didCopy);
+    showDialog({
+      title: didCopy ? 'Debug status copied' : 'Copy failed',
+      message: didCopy
+        ? 'Agency, artist, and campaign status is on the clipboard.'
+        : 'The clipboard did not accept the debug status.',
+      buttons: [{ label: 'OK' }],
+    });
   }
 
   return (
@@ -140,6 +164,36 @@ export function AgencyScreen() {
         reputationLabel={labels.reputation}
       />
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+        {tutorialStep === 'agency_hint' && (
+          <View style={styles.tutorialBanner}>
+            <Text style={styles.tutorialBannerText}>
+              {"Welcome to your Agency.\n\nUpgrade your skills to scout better, negotiate stronger deals, and coach clients to their peak.\n\nInfrastructure upgrades protect and improve your roster.\n\nThe Bank lets you take loans when cash is tight."}
+            </Text>
+            <TouchableOpacity
+              style={styles.tutorialGotItBtn}
+              onPress={() => advanceTutorial('agency_hint')}
+              accessibilityRole="button"
+              accessibilityLabel="Got it"
+            >
+              <Text style={styles.tutorialGotItBtnText}>Got it →</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {__DEV__ && (
+          <Section title="Dev Tools">
+            <TouchableOpacity
+              style={styles.debugBtn}
+              onPress={handleCopyDebugStatus}
+              accessibilityRole="button"
+              accessibilityLabel="Copy debug status"
+            >
+              <Text style={styles.debugBtnText}>
+                {debugCopied ? 'Copied Debug Status' : 'Copy Debug Status'}
+              </Text>
+            </TouchableOpacity>
+          </Section>
+        )}
 
         {/* Agent Stats */}
         <Section title={`${labels.agent} Skills`}>
@@ -153,7 +207,7 @@ export function AgencyScreen() {
                 label={key.replace(/_/g, ' ')}
                 level={level}
                 description={AGENT_STAT_DESCS[key]}
-                costLine={`${formatMoney(cost.money)} · ${cost.reputation} rep`}
+                costLine={`${formatMoney(cost.money)} · ${cost.reputation} ${labels.reputation}`}
                 canAfford={canAfford}
                 onUpgrade={() => upgradeAgentStat(key)}
               />
@@ -169,15 +223,21 @@ export function AgencyScreen() {
             const level = track?.level ?? 0;
             const canAfford = money >= cost.money;
             const isSlot = key === 'roster_slot';
+            const displayLevel = isSlot ? agent.roster_capacity : level;
+            const canSell = isSlot
+              ? agent.roster_capacity > runState.roster.length
+              : level > 0;
             return (
               <UpgradeRow
                 key={key}
                 label={key.replace(/_/g, ' ')}
-                level={isSlot ? agent.roster_capacity : level}
+                level={displayLevel}
                 description={INFRA_DESCS[key]}
                 costLine={`${formatMoney(cost.money)}${cost.per_turn_recurring > 0 ? ` + ${formatMoney(cost.per_turn_recurring)}/turn` : ''}`}
                 canAfford={canAfford}
                 onUpgrade={() => upgradeInfrastructure(key)}
+                canSell={canSell}
+                onSell={() => downgradeInfrastructure(key)}
               />
             );
           })}
@@ -265,9 +325,11 @@ interface UpgradeRowProps {
   costLine: string;
   canAfford: boolean;
   onUpgrade: () => void;
+  canSell?: boolean;
+  onSell?: () => void;
 }
 
-function UpgradeRow({ label, level, description, costLine, canAfford, onUpgrade }: UpgradeRowProps) {
+function UpgradeRow({ label, level, description, costLine, canAfford, onUpgrade, canSell, onSell }: UpgradeRowProps) {
   return (
     <View style={styles.upgradeRow}>
       <View style={styles.upgradeInfo}>
@@ -278,6 +340,15 @@ function UpgradeRow({ label, level, description, costLine, canAfford, onUpgrade 
         <Text style={styles.upgradeDesc}>{description}</Text>
         <Text style={styles.upgradeCost}>{costLine}</Text>
       </View>
+      {onSell !== undefined && (
+        <TouchableOpacity
+          style={[styles.upgradeBtnSell, !canSell && styles.btnDisabled]}
+          onPress={onSell}
+          disabled={!canSell}
+        >
+          <Text style={[styles.upgradeBtnText, !canSell && styles.textDim]}>↓</Text>
+        </TouchableOpacity>
+      )}
       <TouchableOpacity
         style={[styles.upgradeBtn, !canAfford && styles.btnDisabled]}
         onPress={onUpgrade}
@@ -328,6 +399,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  upgradeBtnSell: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: Colors.negative,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   upgradeBtnText: { color: Colors.textPrimary, fontSize: FontSize.xl, fontWeight: '700' },
   bankRow: {
     flexDirection: 'row',
@@ -374,6 +455,40 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   retireBtnText: { color: Colors.negative, fontSize: FontSize.md, fontWeight: '600' },
+  tutorialBanner: {
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+    padding: Spacing.lg,
+    gap: Spacing.md,
+  },
+  tutorialBannerText: {
+    color: Colors.warning,
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    lineHeight: 22,
+  },
+  tutorialGotItBtn: {
+    backgroundColor: Colors.warning,
+    borderRadius: Radius.md,
+    paddingVertical: Spacing.sm,
+    alignItems: 'center',
+  },
+  tutorialGotItBtnText: {
+    color: Colors.bg,
+    fontSize: FontSize.sm,
+    fontWeight: '800',
+  },
+  debugBtn: {
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+    padding: Spacing.md,
+    alignItems: 'center',
+  },
+  debugBtnText: { color: Colors.warning, fontSize: FontSize.md, fontWeight: '700' },
   btnDisabled: { opacity: 0.4 },
   textDim: { color: Colors.textDim },
 });

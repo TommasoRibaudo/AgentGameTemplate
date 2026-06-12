@@ -14,18 +14,19 @@ interface Props {
   visible: boolean;
   draft: ContractDraft;
   negotiationLevel: number;
+  reputationLabel?: string;
   result: CounterResult | null;
   onSubmit: (counter: CounterTerms) => void;
   onClose: () => void;
 }
 
 const AMOUNT_LABEL: Record<string, string> = {
-  per_month:     'Monthly Payment',
+  per_week:     'Weekly Payment',
   lump_sum:      'Lump Sum',
   per_objective: 'Milestone Payout',
 };
 const AMOUNT_DESC: Record<string, string> = {
-  per_month:     'Paid to you each turn the contract is active',
+  per_week:     'Paid to you each week the contract is active',
   lump_sum:      'Paid once immediately when the contract is signed',
   per_objective: 'Base value for each milestone payout',
 };
@@ -34,6 +35,7 @@ export function CounterOfferModal({
   visible,
   draft,
   negotiationLevel,
+  reputationLabel = 'Reputation',
   result,
   onSubmit,
   onClose,
@@ -101,7 +103,7 @@ export function CounterOfferModal({
           <View style={styles.handle} />
 
           {result !== null ? (
-            <ResultView result={result} onClose={onClose} />
+            <ResultView result={result} reputationLabel={reputationLabel} onClose={onClose} />
           ) : (
             <>
               <View style={styles.header}>
@@ -125,7 +127,7 @@ export function CounterOfferModal({
                       </View>
                     </View>
                     <View style={styles.payoutToggle}>
-                      {(['per_month', 'lump_sum'] as PayoutType[]).map(type => (
+                      {(['per_week', 'lump_sum'] as PayoutType[]).map(type => (
                         <TouchableOpacity
                           key={type}
                           style={[styles.payoutOption, payoutType === type && styles.payoutOptionActive]}
@@ -159,11 +161,11 @@ export function CounterOfferModal({
                 )}
 
                 <Field
-                  label="Duration (turns)"
-                  description="Number of turns this contract runs before it expires"
+                  label="Duration (weeks)"
+                  description="Number of weeks this contract runs before it expires"
                   value={duration}
                   onChangeText={setDuration}
-                  hint={`Current: ${draft.duration}t`}
+                  hint={`Current: ${draft.duration}w`}
                 />
 
                 <Field
@@ -202,7 +204,15 @@ export function CounterOfferModal({
   );
 }
 
-function ResultView({ result, onClose }: { result: CounterResult; onClose: () => void }) {
+function ResultView({
+  result,
+  reputationLabel,
+  onClose,
+}: {
+  result: CounterResult;
+  reputationLabel: string;
+  onClose: () => void;
+}) {
   const config = {
     accepted: {
       symbol: '✓',
@@ -223,7 +233,7 @@ function ResultView({ result, onClose }: { result: CounterResult; onClose: () =>
       symbolColor: Colors.negative,
       headline: 'Rejected',
       headlineColor: Colors.negative,
-      body: 'They walked away from negotiations. Your reputation took a small hit (−1).',
+      body: `They walked away from negotiations. Your ${reputationLabel.toLowerCase()} took a small hit (-1).`,
     },
   }[result];
 

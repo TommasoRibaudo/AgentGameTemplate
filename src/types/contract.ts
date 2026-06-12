@@ -1,5 +1,12 @@
 import { ArcStage, ContractTier, PayoutType } from './primitives';
 
+// Clause allowing the label to require a second album after a successful first release.
+// success_threshold is the minimum average installment roll across the album campaign.
+export interface AlbumOptionClause {
+  success_threshold: number;
+  duration: number;
+}
+
 // Reusable shape for objective entries embedded in contract templates
 export interface ObjectiveTemplate {
   description: string;
@@ -37,7 +44,7 @@ export interface ContractDraft {
   payout_type: PayoutType;
   your_cut: number | null;          // % on agent<->client tier only
   amount: number;
-  duration: number;                 // in turns
+  duration: number;                 // in weeks
   objectives: Omit<Objective, 'id' | 'is_met'>[];
   obligations_per_turn: number;
   counterparty_posture: FoggedPosture;
@@ -45,6 +52,7 @@ export interface ContractDraft {
   expires_in: number | null;
   // Non-null means the contract prohibits signing another deal with this scope (e.g. 'label', 'sponsor')
   exclusivity_scope: string | null;
+  album_option: AlbumOptionClause | null;
 }
 
 // An active contract — promoted from a ContractDraft on Approve.
@@ -64,6 +72,7 @@ export interface Contract {
   expires_in: number | null;
   exclusivity_scope: string | null;
   turns_active: number;
+  album_option: AlbumOptionClause | null;
 }
 
 // The terms a player proposes when countering a contract offer.
@@ -92,7 +101,7 @@ export interface ContractTemplate {
   payout_type: PayoutType;
   // ranges the engine samples from; scaling factors shift the distribution
   amount_range: [number, number];
-  duration_range: [number, number];     // in turns
+  duration_range: [number, number];     // in weeks
   cut_range: [number, number] | null;   // null on client<->entity tier
   obligations_range: [number, number];
   // which client stats scale the generated amount up or down
@@ -106,7 +115,11 @@ export interface ContractTemplate {
   expires_in: number | null;
   // If set, the contract includes this exclusivity clause (e.g. 'label', 'sponsor')
   exclusivity_scope?: string | null;
+  // Minimum client audience required for this offer to be generated
+  min_audience?: number;
   // Milestone objectives attached to this contract regardless of payout_type;
   // payouts are computed as payout_fraction * generated amount
   objective_templates?: ObjectiveTemplate[];
+  // If set, the label may require a second album once the first is released successfully
+  album_option?: AlbumOptionClause;
 }

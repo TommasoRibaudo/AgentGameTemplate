@@ -42,6 +42,17 @@ describe('useMetaStore — recordRunCompletion', () => {
     useMetaStore.getState().recordRunCompletion(makeRunState({ is_active: false, end_condition: 'bankrupt' }), manifest);
     expect(useMetaStore.getState().completed_runs).toHaveLength(2);
   });
+
+  it('records an ended run only once by run_id', () => {
+    const state = makeRunState({ is_active: false, end_condition: 'bankrupt' });
+
+    useMetaStore.getState().recordRunCompletion(state, manifest);
+    useMetaStore.getState().recordRunCompletion(state, manifest);
+
+    const runs = useMetaStore.getState().completed_runs;
+    expect(runs).toHaveLength(1);
+    expect(runs[0].end_condition).toBe('bankrupt');
+  });
 });
 
 describe('useMetaStore — unlockAchievement', () => {

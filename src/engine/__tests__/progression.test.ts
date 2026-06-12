@@ -5,6 +5,7 @@ import {
   upgradeAgentStat,
   computeInfrastructureUpgradeCost,
   upgradeInfrastructure,
+  downgradeInfrastructure,
   applyBuildingDevelopment,
   boostClientStat,
   applyContractSatisfaction,
@@ -141,6 +142,78 @@ describe('progression — upgradeInfrastructure', () => {
   });
 });
 
+describe('progression — downgradeInfrastructure', () => {
+  it('removes the defense track when downgrading from level 1 to 0', () => {
+    const state = makeRunState({
+      agent: makeAgentState({ defense_tracks: [{ key: 'medical', level: 1, per_turn_cost: 200 }] }),
+    });
+    const result = downgradeInfrastructure(state, 'medical', makeManifest());
+    expect(result.agent.defense_tracks.find(t => t.key === 'medical')).toBeUndefined();
+    expect(result.money).toBeGreaterThan(state.money);
+  });
+
+  it('decrements level and recalculates per_turn_cost when downgrading above level 1', () => {
+    const state = makeRunState({
+      agent: makeAgentState({ defense_tracks: [{ key: 'legal', level: 2, per_turn_cost: 350 }] }),
+    });
+    const result = downgradeInfrastructure(state, 'legal', makeManifest());
+    const track = result.agent.defense_tracks.find(t => t.key === 'legal');
+    expect(track).toBeDefined();
+    expect(track!.level).toBe(1);
+    expect(track!.per_turn_cost).toBe(250); // base recurring for legal at level 1
+    expect(result.money).toBeGreaterThan(state.money);
+  });
+
+  it('refunds 50% of the cost paid for the last upgrade level', () => {
+    // insurance base money = 2000; upgrading from level 0 multiplier = 1.0 → cost = 2000
+    const state = makeRunState({
+      agent: makeAgentState({ defense_tracks: [{ key: 'insurance', level: 1, per_turn_cost: 200 }] }),
+    });
+    const result = downgradeInfrastructure(state, 'insurance', makeManifest());
+    expect(result.money - state.money).toBe(1000); // 50% of 2000
+  });
+
+  it('does nothing when track does not exist', () => {
+    const state = makeRunState();
+    const result = downgradeInfrastructure(state, 'pr', makeManifest());
+    expect(result).toBe(state);
+  });
+
+  it('decrements roster_capacity and refunds when roster has room', () => {
+    // default makeRunState has empty roster and roster_capacity ≥ 1
+    const state = makeRunState({ money: 0 });
+    const initialCapacity = state.agent.roster_capacity;
+    const result = downgradeInfrastructure(state, 'roster_slot', makeManifest());
+    expect(result.agent.roster_capacity).toBe(initialCapacity - 1);
+    expect(result.money).toBeGreaterThan(0);
+  });
+
+  it('refuses to sell roster_slot when capacity equals current roster size', () => {
+    const client = makeClient();
+    const state = makeRunState({
+      roster: [client],
+      agent: makeAgentState({ roster_capacity: 1, defense_tracks: [] }),
+    });
+    const result = downgradeInfrastructure(state, 'roster_slot', makeManifest());
+    expect(result.agent.roster_capacity).toBe(1);
+    expect(result.money).toBe(state.money);
+  });
+
+  it('only changes the targeted track when multiple tracks exist', () => {
+    const state = makeRunState({
+      agent: makeAgentState({
+        defense_tracks: [
+          { key: 'pr',    level: 2, per_turn_cost: 420 },
+          { key: 'legal', level: 1, per_turn_cost: 250 },
+        ],
+      }),
+    });
+    const result = downgradeInfrastructure(state, 'pr', makeManifest());
+    expect(result.agent.defense_tracks.find(t => t.key === 'pr')!.level).toBe(1);
+    expect(result.agent.defense_tracks.find(t => t.key === 'legal')!.level).toBe(1);
+  });
+});
+
 describe('progression building development', () => {
   it('improves matching client stats each turn based on building level', () => {
     const client = makeClient({ stats: makeClientStats({ form: 40, marketability: 50, morale: 60 }) });
@@ -215,7 +288,7 @@ describe('progression applyContractSatisfaction', () => {
     const entityContract = makeContract({
       tier: 'client_entity',
       client_id: client.id,
-      payout_type: 'per_month',
+      payout_type: 'per_week',
       amount: 13_000, // > 8_000 * 1.5 = 12_000
     });
     const state = makeRunState({ roster: [client], contracts: [entityContract] });
@@ -231,7 +304,7 @@ describe('progression applyContractSatisfaction', () => {
     const entityContract = makeContract({
       tier: 'client_entity',
       client_id: client.id,
-      payout_type: 'per_month',
+      payout_type: 'per_week',
       amount: 9_000, // >= 8_000 but < 12_000
     });
     const state = makeRunState({ roster: [client], contracts: [entityContract] });
@@ -253,7 +326,7 @@ describe('progression applyContractSatisfaction', () => {
       arc_stage: 'peak', stats: makeClientStats({ morale: 50 }), campaign_history: campaignHistory,
     });
     const entityContract = makeContract({
-      tier: 'client_entity', client_id: client.id, payout_type: 'per_month', amount: 9_000,
+      tier: 'client_entity', client_id: client.id, payout_type: 'per_week', amount: 9_000,
     });
     const state = makeRunState({ roster: [client], contracts: [entityContract] });
 
@@ -274,7 +347,7 @@ describe('progression applyContractSatisfaction', () => {
       arc_stage: 'peak', stats: makeClientStats({ morale: 50 }), campaign_history: campaignHistory,
     });
     const entityContract = makeContract({
-      tier: 'client_entity', client_id: client.id, payout_type: 'per_month', amount: 9_000,
+      tier: 'client_entity', client_id: client.id, payout_type: 'per_week', amount: 9_000,
     });
     const state = makeRunState({ roster: [client], contracts: [entityContract] });
 
@@ -306,7 +379,7 @@ describe('progression applyContractSatisfaction', () => {
     // rising mult = 0.6 → expected = 8_000 * 0.6 = 4_800; 1.5× = 7_200
     const client = makeClient({ arc_stage: 'rising', stats: makeClientStats({ morale: 50 }) });
     const entityContract = makeContract({
-      tier: 'client_entity', client_id: client.id, payout_type: 'per_month', amount: 7_500, // > 7_200
+      tier: 'client_entity', client_id: client.id, payout_type: 'per_week', amount: 7_500, // > 7_200
     });
     const state = makeRunState({ roster: [client], contracts: [entityContract] });
 

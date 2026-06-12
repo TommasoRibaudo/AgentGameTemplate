@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import { useMetaStore } from '../store/useMetaStore';
 import { ACHIEVEMENT_DEFINITIONS } from '../engine/achievements';
+import { MANIFEST_REGISTRY } from '../manifest/registry';
 import { Colors, FontSize, Spacing, Radius, formatMoney } from '../theme';
 
 const END_LABELS: Record<string, string> = {
@@ -51,6 +52,7 @@ export function LegacyScreen() {
           const date = new Date(item.timestamp).toLocaleDateString(undefined, {
             month: 'short', day: 'numeric', year: 'numeric',
           });
+          const reputationLabel = MANIFEST_REGISTRY[item.variant_id]?.labels.reputation ?? 'Reputation';
           const badges = item.newly_unlocked_achievements ?? [];
 
           return (
@@ -85,10 +87,10 @@ export function LegacyScreen() {
 
                 {/* Stats */}
                 <View style={styles.statsRow}>
-                  <StatChip label="Peak Rep"  value={String(item.peak_reputation)} />
+                  <StatChip label={`Peak ${reputationLabel}`} value={String(item.peak_reputation)} />
                   <StatChip label="Earned"    value={formatMoney(item.total_earnings)} />
                   <StatChip label="Peaked"    value={`${item.clients_developed}×`} />
-                  <StatChip label="Turns"     value={`T${item.turn_number}`} />
+                  <StatChip label="Weeks"     value={`W${item.turn_number}`} />
                 </View>
 
                 {/* Achievement badges earned this run */}

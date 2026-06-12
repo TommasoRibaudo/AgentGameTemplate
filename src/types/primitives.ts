@@ -8,7 +8,7 @@ export type SoftStatKey = 'form' | 'marketability' | 'morale';
 
 export type ArcStage = 'rising' | 'peak' | 'declining';
 
-export type PayoutType = 'per_month' | 'lump_sum' | 'per_objective';
+export type PayoutType = 'per_week' | 'lump_sum' | 'per_objective';
 
 // agent<->client: you represent the client; client<->entity: the client signs a deal you broker
 export type ContractTier = 'agent_client' | 'client_entity';
@@ -16,7 +16,7 @@ export type ContractTier = 'agent_client' | 'client_entity';
 export type EventCategory = 'client' | 'market' | 'agency' | 'windfall';
 export type EventSeverity = 'minor' | 'major' | 'crisis';
 
-export type DecisionItemType = 'contract_offer' | 'client_request' | 'opportunity' | 'renewal';
+export type DecisionItemType = 'contract_offer' | 'client_request' | 'opportunity' | 'renewal' | 'label_option';
 
 export type TurnPhase = 'turn_open' | 'upkeep' | 'decision' | 'resolution' | 'turn_close';
 

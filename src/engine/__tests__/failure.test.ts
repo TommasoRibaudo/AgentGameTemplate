@@ -32,7 +32,7 @@ describe('failure — computeCreditCeiling', () => {
     const contractId = nextId();
     const client = makeClient({ id: clientId, agent_contract_id: contractId });
     const agentContract = makeContract({ id: contractId, tier: 'agent_client', client_id: clientId, your_cut: 15 });
-    const entityContract = makeContract({ tier: 'client_entity', client_id: clientId, payout_type: 'per_month', amount: 10_000 });
+    const entityContract = makeContract({ tier: 'client_entity', client_id: clientId, payout_type: 'per_week', amount: 10_000 });
     const stateEmpty = makeRunState({ reputation: 50 });
     const stateWithClient = makeRunState({
       reputation: 50,
@@ -223,7 +223,7 @@ describe('failure — checkFailureCondition', () => {
     expect(result.end_condition).toBe('bankrupt');
   });
 
-  it('does not trigger failure when warning still has turns left', () => {
+  it('does not trigger failure when warning still has weeks left', () => {
     const state = makeRunState({
       debt: makeDebtState({ is_active: true, bankruptcy_warning_turns_remaining: 2 }),
     });

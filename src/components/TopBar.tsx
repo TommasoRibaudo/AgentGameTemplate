@@ -38,7 +38,7 @@ export function TopBar({
       <Divider />
       <Cell label="Roster" value={`${rosterCount}/${rosterCapacity}`} />
       <Divider />
-      <Cell label="Date" value={turnDate} />
+      <Cell label="Week" value={turnDate} />
       {lowMoneyWarning && (
         <View style={styles.warningBadge}>
           <Text style={styles.warningText}>LOW CASH</Text>

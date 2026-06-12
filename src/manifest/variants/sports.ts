@@ -41,7 +41,7 @@ export const SPORTS_MANIFEST: VariantManifest = {
   // ── Entity types ─────────────────────────────────────────────────────────────
 
   entity_types: [
-    { key: 'football_club',   label: 'Football Club',   valid_payout_types: ['per_month'] },
+    { key: 'football_club',   label: 'Football Club',   valid_payout_types: ['per_week'] },
     { key: 'sportswear_brand',label: 'Sportswear Brand',valid_payout_types: ['lump_sum'] },
     { key: 'sports_media',    label: 'Sports Media',    valid_payout_types: ['per_objective'] },
   ],
@@ -56,11 +56,12 @@ export const SPORTS_MANIFEST: VariantManifest = {
       form_weight:  0.6,
       variance:     10,
       base_payout:  12_000,
-      payout_type:  'per_month',
+      payout_type:  'per_week',
       per_installment_stat_deltas: { talent: 1, form: 1 },
       event_trigger_threshold:  30,
       trait_trigger_threshold:  88,
       valid_arc_stages: ['rising', 'peak'],
+      size_labels: { small: 'Light Camp', medium: 'Full Pre-Season', large: 'Elite Training Block' },
     },
     {
       key:          'match_season',
@@ -69,11 +70,12 @@ export const SPORTS_MANIFEST: VariantManifest = {
       form_weight:  0.9,
       variance:     18,
       base_payout:  45_000,
-      payout_type:  'per_month',
+      payout_type:  'per_week',
       per_installment_stat_deltas: { form: 1, morale: -1 },
       event_trigger_threshold:  28,
       trait_trigger_threshold:  90,
       valid_arc_stages: ['peak'],
+      size_labels: { small: 'Cup Run', medium: 'Full Season', large: 'Championship Push' },
     },
     {
       key:          'media_campaign',
@@ -82,11 +84,12 @@ export const SPORTS_MANIFEST: VariantManifest = {
       form_weight:  0.4,
       variance:     12,
       base_payout:  25_000,
-      payout_type:  'per_month',
+      payout_type:  'per_week',
       per_installment_stat_deltas: { marketability: 2 },
       event_trigger_threshold:  25,
       trait_trigger_threshold:  85,
       valid_arc_stages: ['rising', 'peak', 'declining'],
+      size_labels: { small: 'Local Media', medium: 'National Campaign', large: 'Global Campaign' },
     },
     {
       key:          'charity_event',
@@ -95,11 +98,12 @@ export const SPORTS_MANIFEST: VariantManifest = {
       form_weight:  0.3,
       variance:     8,
       base_payout:  5_000,
-      payout_type:  'per_month',
+      payout_type:  'per_week',
       per_installment_stat_deltas: { marketability: 1, morale: 2 },
       event_trigger_threshold:  20,
       trait_trigger_threshold:  80,
       valid_arc_stages: ['rising', 'peak', 'declining'],
+      size_labels: { small: 'Community Event', medium: 'Charity Match', large: 'Foundation Showcase' },
     },
   ],
 
@@ -141,6 +145,21 @@ export const SPORTS_MANIFEST: VariantManifest = {
       event_bias:             { client: 1.5 },
       trigger_condition_key:  'repeated_injury',
       trigger_threshold:      15,
+    },
+    {
+      key:                    'press_hardened',
+      label:                  'Press Hardened',
+      stat_modifiers:         { morale: 2, marketability: 1 },
+      marketability_modifier: 0,
+      event_bias:             { client: 0.85 },
+      trigger_condition_key:  'decision_press_scandal_response_go_quiet',
+      trigger_threshold:      0,
+      decision_trigger:       {
+        template_key:   'press_scandal_response',
+        option_key:     'go_quiet',
+        required_count: 3,
+        probability:    1,
+      },
     },
   ],
 
@@ -251,7 +270,7 @@ export const SPORTS_MANIFEST: VariantManifest = {
     {
       key:                  'athlete_signing',
       tier:                 'agent_client',
-      payout_type:          'per_month',
+      payout_type:          'per_week',
       amount_range:         [1_500, 4_000],
       duration_range:       [24, 48],
       cut_range:            [10, 20],
@@ -267,7 +286,7 @@ export const SPORTS_MANIFEST: VariantManifest = {
     {
       key:                  'club_contract',
       tier:                 'client_entity',
-      payout_type:          'per_month',
+      payout_type:          'per_week',
       amount_range:         [10_000, 80_000],
       duration_range:       [12, 36],
       cut_range:            null,
@@ -350,7 +369,7 @@ export const SPORTS_MANIFEST: VariantManifest = {
     {
       key:                   'training_camp_request',
       type:                  'client_request',
-      description_template:  '{client_name} wants to attend a specialist training camp this month.',
+      description_template:  '{client_name} wants to attend a specialist training camp this week.',
       rep_gate:              0,
       valid_arc_stages:      ['rising'],
       contract_template_key: null,
@@ -424,14 +443,14 @@ export const SPORTS_MANIFEST: VariantManifest = {
     agent_stat_upgrade_cost:     { money: 2_000, reputation: 5 },
     roster_slot_upgrade_cost:    { money: 5_000 },
     defense_track_upgrade_cost:  { money: 2_000, per_turn_recurring: 200 },
-    income_satisfaction_threshold: 20_000,  // comfortable per_month entity income at peak arc stage
+    income_satisfaction_threshold: 20_000,  // comfortable per_week entity income at peak arc stage
   },
 
   // ── Arc config ────────────────────────────────────────────────────────────────
 
   arc: {
-    rising_to_peak_base_turns:    20, // athletes peak younger
-    peak_to_declining_base_turns: 28,
+    rising_to_peak_base_turns:    87, // athletes peak younger
+    peak_to_declining_base_turns: 122,
     stage_multipliers: {
       rising:    { talent: 0.75, form: 0.75, marketability: 0.65, income: 0.55 },
       peak:      { talent: 1.00, form: 1.00, marketability: 1.00, income: 1.00 },

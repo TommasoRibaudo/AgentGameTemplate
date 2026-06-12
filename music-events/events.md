@@ -2,6 +2,8 @@
 
 ## general 
 
+when starting, no label: Their family does not initially consider music a serious career (you might lose the artist)
+
 viral video: +fans, spend money to get ++fans
 
 drunk driving: poor form, poor morale increase the chance of this happening, you spend money to solve it (and still lose rep) or just lose more rep

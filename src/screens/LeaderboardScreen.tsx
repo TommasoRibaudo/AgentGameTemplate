@@ -7,6 +7,7 @@ import { RootParamList } from '../navigation/types';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMetaStore } from '../store/useMetaStore';
+import { MANIFEST_REGISTRY } from '../manifest/registry';
 import { Colors, FontSize, Spacing, Radius, formatMoney } from '../theme';
 
 export type LeaderboardScreenProps = NativeStackScreenProps<RootParamList, 'Leaderboard'>;
@@ -79,26 +80,30 @@ export function LeaderboardScreen() {
             <Text style={styles.emptyHint}>Finish your first career to see it here.</Text>
           </View>
         }
-        renderItem={({ item, index }) => (
-          <View style={styles.row}>
-            <View style={styles.rank}>
-              <Text style={styles.rankNum}>{index + 1}</Text>
-            </View>
-            <View style={styles.info}>
-              <View style={styles.rowTop}>
-                <Text style={styles.variantLabel}>{item.variant_id.replace(/_v\d+$/, '')}</Text>
-                <Text style={styles.endCond}>{item.end_condition.replace('_', ' ')}</Text>
+        renderItem={({ item, index }) => {
+          const reputationLabel = MANIFEST_REGISTRY[item.variant_id]?.labels.reputation ?? 'Reputation';
+
+          return (
+            <View style={styles.row}>
+              <View style={styles.rank}>
+                <Text style={styles.rankNum}>{index + 1}</Text>
               </View>
-              <View style={styles.rowStats}>
-                <Text style={styles.statItem}>Rep {item.peak_reputation}</Text>
-                <Text style={styles.statItem}>{formatMoney(item.total_earnings)}</Text>
-                <Text style={styles.statItem}>{item.clients_developed} peaked</Text>
-                <Text style={styles.statItem}>T{item.turn_number}</Text>
+              <View style={styles.info}>
+                <View style={styles.rowTop}>
+                  <Text style={styles.variantLabel}>{item.variant_id.replace(/_v\d+$/, '')}</Text>
+                  <Text style={styles.endCond}>{item.end_condition.replace('_', ' ')}</Text>
+                </View>
+                <View style={styles.rowStats}>
+                  <Text style={styles.statItem}>{reputationLabel} {item.peak_reputation}</Text>
+                  <Text style={styles.statItem}>{formatMoney(item.total_earnings)}</Text>
+                  <Text style={styles.statItem}>{item.clients_developed} peaked</Text>
+                  <Text style={styles.statItem}>W{item.turn_number}</Text>
+                </View>
               </View>
+              <Text style={styles.score}>{item.score.toLocaleString()}</Text>
             </View>
-            <Text style={styles.score}>{item.score.toLocaleString()}</Text>
-          </View>
-        )}
+          );
+        }}
       />
     </SafeAreaView>
   );

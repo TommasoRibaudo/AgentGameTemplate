@@ -42,8 +42,10 @@ export const Radius = {
 export function formatMoney(n: number): string {
   const abs = Math.abs(n);
   const sign = n < 0 ? '-' : '';
-  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000)     return `${sign}$${Math.round(abs / 1_000)}k`;
+  if (abs >= 10_000_000) return `${sign}$${Math.round(abs / 1_000_000)}M`;
+  if (abs >= 1_000_000)  return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 10_000)     return `${sign}$${Math.round(abs / 1_000)}k`;
+  if (abs >= 1_000)      return `${sign}$${(abs / 1_000).toFixed(1)}k`;
   return `${sign}$${abs}`;
 }
 
@@ -52,9 +54,11 @@ export function formatDelta(n: number, prefix = ''): string {
   return `${n > 0 ? '+' : ''}${prefix}${n}`;
 }
 
-// 1 turn ≈ 1 month. Displays as months (< 12) or years (≥ 12, rounded to nearest 0.5).
 export function formatDuration(turns: number): string {
-  if (turns < 12) return turns === 1 ? '1 month' : `${turns} months`;
-  const years = Math.round((turns / 12) * 2) / 2;
-  return years === 1 ? '1 year' : `${years} years`;
+  return turns === 1 ? '1 week' : `${turns} weeks`;
+}
+
+export function formatAge(ageWeeks: number): string {
+  const years = Math.floor(ageWeeks / 52);
+  return `${years}`;
 }

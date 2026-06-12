@@ -3,7 +3,7 @@ import { NavigatorScreenParams } from '@react-navigation/native';
 // ─── Tab navigator (active run) ───────────────────────────────────────────────
 export type TabParamList = {
   Home: undefined;
-  Roster: undefined;
+  Roster: NavigatorScreenParams<RosterStackParamList> | undefined;
   Scout: undefined;
   Agency: undefined;
 };
@@ -11,7 +11,7 @@ export type TabParamList = {
 // ─── Roster stack ─────────────────────────────────────────────────────────────
 export type RosterStackParamList = {
   RosterList: undefined;
-  ClientDetail: { clientId: string };
+  ClientDetail: { clientId: string; initialTab?: 'overview' | 'stats' | 'contracts' | 'campaign' };
 };
 
 // ─── Scout stack ──────────────────────────────────────────────────────────────

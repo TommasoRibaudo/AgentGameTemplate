@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { useHydrateStores, useAutoSave } from './src/store/persistence';
 import { useIsRunActive } from './src/store/useRunStore';
+import { DialogProvider } from './src/context/DialogContext';
 import { Colors } from './src/theme';
 
 function AppRoot() {
@@ -25,8 +26,10 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <NavigationContainer>
-        <AppRoot />
-        <StatusBar style="light" />
+        <DialogProvider>
+          <AppRoot />
+          <StatusBar style="light" />
+        </DialogProvider>
       </NavigationContainer>
     </SafeAreaProvider>
   );

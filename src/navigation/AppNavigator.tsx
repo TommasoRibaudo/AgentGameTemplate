@@ -1,9 +1,10 @@
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Text } from 'react-native';
 import { RootParamList, TabParamList, RosterStackParamList, ScoutStackParamList } from './types';
 import { Colors } from '../theme';
+import { RunTabBar } from '../components/RunTabBar';
+import { RunEventOverlay } from '../components/RunEventOverlay';
 
 // Screens
 import { HomeScreen }          from '../screens/HomeScreen';
@@ -49,30 +50,26 @@ function ScoutNavigator() {
 
 // ─── Tab navigator (in-run) ───────────────────────────────────────────────────
 
-const TAB_ICONS: Record<string, string> = {
-  Home: '⌂', Roster: '◈', Scout: '◉', Agency: '⚙',
-};
-
 function RunNavigator() {
   return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown: false,
-        tabBarStyle:            { backgroundColor: Colors.tabBar, borderTopColor: Colors.border },
-        tabBarActiveTintColor:  Colors.accent,
-        tabBarInactiveTintColor:Colors.textDim,
-        tabBarIcon: ({ color }) => (
-          <Text style={{ color, fontSize: 18 }}>{TAB_ICONS[route.name] ?? route.name[0]}</Text>
-        ),
-      })}
-    >
-      <Tab.Screen name="Home" component={HomeScreen}
-        options={{ headerShown: true, title: 'Home', ...headerOpts }} />
-      <Tab.Screen name="Roster" component={RosterNavigator} />
-      <Tab.Screen name="Scout"  component={ScoutNavigator} />
-      <Tab.Screen name="Agency" component={AgencyScreen}
-        options={{ headerShown: true, title: 'Agency', ...headerOpts }} />
-    </Tab.Navigator>
+    <>
+      <Tab.Navigator
+        screenOptions={{
+          headerShown: false,
+          tabBarActiveTintColor:  Colors.accent,
+          tabBarInactiveTintColor:Colors.textDim,
+        }}
+        tabBar={props => <RunTabBar {...props} />}
+      >
+        <Tab.Screen name="Home" component={HomeScreen}
+          options={{ headerShown: true, title: 'Home', ...headerOpts }} />
+        <Tab.Screen name="Roster" component={RosterNavigator} />
+        <Tab.Screen name="Scout"  component={ScoutNavigator} />
+        <Tab.Screen name="Agency" component={AgencyScreen}
+          options={{ headerShown: true, title: 'Agency', ...headerOpts }} />
+      </Tab.Navigator>
+      <RunEventOverlay />
+    </>
   );
 }
 

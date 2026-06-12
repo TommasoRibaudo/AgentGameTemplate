@@ -48,6 +48,8 @@ export const useMetaStore = create<MetaStore>((set) => ({
   recordRunCompletion: (state, manifest) => {
     if (!state.end_condition) return;
     set(store => {
+      if (store.completed_runs.some(record => record.run_id === state.id)) return {};
+
       const newlyUnlocked = evaluateAchievements(
         state,
         store.completed_runs,

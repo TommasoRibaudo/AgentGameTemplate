@@ -12,6 +12,7 @@ import {
 import { makeRunState, makeClient, makeManifest, makeAgentState, makeClientStats, makeContract, nextId } from './fixtures';
 import { GameEvent, EventOutcome } from '../../types/event';
 import { EventDefinition } from '../../types/manifest';
+import { Campaign, CatalogRelease } from '../../types/campaign';
 
 const makeEvent = (overrides?: Partial<GameEvent>): GameEvent => ({
   id: `evt_${nextId()}`,
@@ -27,6 +28,28 @@ const makeEvent = (overrides?: Partial<GameEvent>): GameEvent => ({
   defense_track_key: 'pr',
   is_resolved: false,
   chosen_option_key: null,
+  ...overrides,
+});
+
+const makeAlbumRelease = (overrides?: Partial<CatalogRelease>): CatalogRelease => ({
+  id: 'rel_test',
+  campaign_id: 'cmp_test',
+  kind: 'album',
+  type_key: 'album_cycle',
+  title: 'Test Album',
+  songs: [{ id: 'song_1', title: 'Track 1', quality: 70 }],
+  released_turn: 10,
+  turns_since_release: 0,
+  album_units_sold: 0,
+  total_streams: 0,
+  album_income_total: 0,
+  stream_income_total: 0,
+  latest_turn_album_units: 0,
+  latest_turn_streams: 0,
+  latest_turn_income: 0,
+  latest_turn_fan_gain: 0,
+  total_fan_gain: 0,
+  is_selling_albums: true,
   ...overrides,
 });
 
@@ -89,6 +112,97 @@ describe('event — computeEventProbability', () => {
   it('is always a positive number', () => {
     const prob = computeEventProbability(makeRunState(), 'agency', makeManifest());
     expect(prob).toBeGreaterThan(0);
+  });
+
+  it('ramps event probability up after the opening turns', () => {
+    const early = computeEventProbability(
+      makeRunState({ turn_number: 2, roster: [makeClient()] }),
+      'market',
+      makeManifest(),
+    );
+    const later = computeEventProbability(
+      makeRunState({ turn_number: 12, roster: [makeClient()] }),
+      'market',
+      makeManifest(),
+    );
+    expect(early).toBeLessThan(later);
+  });
+
+  it('reduces event probability after multiple skipped turns in a row', () => {
+    const engaged = computeEventProbability(
+      makeRunState({ turn_number: 20, roster: [makeClient({ audience: 250_000 })] }),
+      'market',
+      makeManifest(),
+    );
+    const skipped = computeEventProbability(
+      makeRunState({
+        turn_number: 20,
+        roster: [makeClient({ audience: 250_000 })],
+        narrator_pacing: { consecutive_skipped_turns: 3, last_turn_skipped_items: 2 },
+      }),
+      'market',
+      makeManifest(),
+    );
+    expect(skipped).toBeLessThan(engaged);
+  });
+
+  it('increases event probability for engaged players during tour or album momentum', () => {
+    const clientId = nextId();
+    const baseline = computeEventProbability(
+      makeRunState({ turn_number: 20, roster: [makeClient({ id: clientId, audience: 250_000 })] }),
+      'market',
+      makeManifest(),
+    );
+    const momentum = computeEventProbability(
+      makeRunState({
+        turn_number: 20,
+        roster: [makeClient({ id: clientId, audience: 250_000, catalog_releases: [makeAlbumRelease()] })],
+        campaigns: [{
+          id: nextId(),
+          client_id: clientId,
+          type_key: 'tour',
+          total_turns: 6,
+          turns_remaining: 3,
+          installment_results: [],
+          pending_objective_ids: [],
+        }],
+        narrator_pacing: { consecutive_skipped_turns: 0, last_turn_skipped_items: 0 },
+      }),
+      'market',
+      makeManifest(),
+    );
+    expect(momentum).toBeGreaterThan(baseline);
+  });
+
+  it('does not apply momentum boost immediately after skipped items', () => {
+    const clientId = nextId();
+    const baseline = makeRunState({
+      turn_number: 20,
+      roster: [makeClient({ id: clientId, audience: 250_000, catalog_releases: [makeAlbumRelease()] })],
+      campaigns: [{
+        id: nextId(),
+        client_id: clientId,
+        type_key: 'tour',
+        total_turns: 6,
+        turns_remaining: 3,
+        installment_results: [],
+        pending_objective_ids: [],
+      }],
+    });
+    const engaged = computeEventProbability(
+      baseline,
+      'market',
+      makeManifest(),
+    );
+    const recovering = computeEventProbability(
+      {
+        ...baseline,
+        narrator_pacing: { consecutive_skipped_turns: 1, last_turn_skipped_items: 2 },
+      },
+      'market',
+      makeManifest(),
+    );
+    expect(recovering).toBeLessThan(engaged);
   });
 });
 
@@ -174,6 +288,96 @@ describe('event — resolveEvent', () => {
     const state = makeRunState({ roster: [client], pending_events: [event] });
     const result = resolveEvent(state, event.id, null, makeManifest());
     expect(result.roster[0].audience).toBeLessThan(client.audience);
+  });
+
+  it('cancels the linked campaign without paying money when a scrap option is chosen', () => {
+    const clientId = nextId();
+    const campaignId = nextId();
+    const campaign: Campaign = {
+      id: campaignId,
+      client_id: clientId,
+      type_key: 'album_cycle',
+      total_turns: 10,
+      turns_remaining: 6,
+      installment_results: [],
+      pending_objective_ids: [],
+    };
+    const client = makeClient({ id: clientId, active_campaign_id: campaignId, stats: makeClientStats({ morale: 50 }) });
+    const event = makeEvent({
+      campaign_id: campaignId,
+      client_id: clientId,
+      options: [
+        {
+          key: 'let_scrap',
+          label: 'Let Them Scrap It',
+          outcome: { money_delta: 0, reputation_delta: 0, stat_deltas: { morale: 5 }, cancels_campaign: true, injects_board_item_key: null },
+        },
+      ],
+      default_outcome: { money_delta: 0, reputation_delta: 0, stat_deltas: {}, injects_board_item_key: null },
+    });
+    const state = makeRunState({ money: 5_000, roster: [client], campaigns: [campaign], pending_events: [event] });
+
+    const result = resolveEvent(state, event.id, 'let_scrap', makeManifest());
+
+    expect(result.money).toBe(5_000);
+    expect(result.total_earnings).toBe(0);
+    expect(result.campaigns).toHaveLength(0);
+    expect(result.roster[0].active_campaign_id).toBeNull();
+    expect(result.roster[0].stats.morale.true_value).toBe(55);
+  });
+
+  it('can return value to the linked release campaign instead of paying immediate cash', () => {
+    const clientId = nextId();
+    const campaignId = nextId();
+    const campaign: Campaign = {
+      id: campaignId,
+      client_id: clientId,
+      type_key: 'album_cycle',
+      release_plan: {
+        kind: 'album',
+        title: 'Test Album',
+        songs: [
+          { id: 'song_1', title: 'Deep Cut', quality: 74 },
+          { id: 'song_2', title: 'Ceiling Hit', quality: 96 },
+        ],
+      },
+      total_turns: 10,
+      turns_remaining: 4,
+      installment_results: [],
+      pending_objective_ids: [],
+    };
+    const client = makeClient({ id: clientId, active_campaign_id: campaignId });
+    const event = makeEvent({
+      campaign_id: campaignId,
+      client_id: clientId,
+      options: [
+        {
+          key: 'lean_in',
+          label: 'Lean In',
+          outcome: {
+            money_delta: 0,
+            reputation_delta: 1,
+            stat_deltas: { marketability: 3 },
+            release_quality_delta: 8,
+            injects_board_item_key: null,
+          },
+        },
+      ],
+      default_outcome: { money_delta: 0, reputation_delta: 0, stat_deltas: {}, injects_board_item_key: null },
+    });
+    const state = makeRunState({
+      money: 5_000,
+      total_earnings: 0,
+      roster: [client],
+      campaigns: [campaign],
+      pending_events: [event],
+    });
+
+    const result = resolveEvent(state, event.id, 'lean_in', makeManifest());
+
+    expect(result.money).toBe(5_000);
+    expect(result.total_earnings).toBe(0);
+    expect(result.campaigns[0].release_plan?.songs.map(song => song.quality)).toEqual([82, 100]);
   });
 });
 
@@ -371,6 +575,71 @@ describe('event — generateEvents', () => {
     expect(gated?.campaign_id).toBe(campaignId);
     expect(gated?.client_id).toBe(clientId);
   });
+
+  it('does not generate scope-gated events when no matching contract is active', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const manifest = makeManifest({
+      events: [makeEventDef({ key: 'sponsor_backlash', category: 'market', requires_active_scope: 'sponsor' })],
+    });
+    const withoutSponsor = makeRunState({ roster: [makeClient({ id: clientId })], turn_number: 2 });
+    expect(generateEvents(withoutSponsor, manifest).some(e => e.template_key === 'sponsor_backlash')).toBe(false);
+  });
+
+  it('does not repeat an event template that fired in the last 3 turns', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const repeatedKey = 'repeated_event';
+    const otherKey    = 'other_event';
+    const manifest = makeManifest({
+      events: [
+        makeEventDef({ key: repeatedKey, category: 'market' }),
+        makeEventDef({ key: otherKey,    category: 'market' }),
+      ],
+    });
+    const recentlyResolvedEvent: GameEvent = {
+      id: 'evt_old',
+      template_key: repeatedKey,
+      category: 'market',
+      severity: 'minor',
+      client_id: null,
+      description: 'Old event',
+      options: [],
+      default_outcome: { money_delta: 0, reputation_delta: 0, stat_deltas: {}, injects_board_item_key: null },
+      defense_track_key: null,
+      is_resolved: true,
+      chosen_option_key: null,
+    };
+    const state = makeRunState({
+      roster: [makeClient()],
+      turn_number: 5,
+      resolved_events: [recentlyResolvedEvent],
+    });
+    const events = generateEvents(state, manifest);
+    expect(events.every(e => e.template_key !== repeatedKey)).toBe(true);
+  });
+
+  it('generates scope-gated events and targets the client with the matching contract', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const sponsorContract = makeContract({
+      client_id: clientId,
+      tier: 'client_entity',
+      exclusivity_scope: 'sponsor',
+      duration_remaining: 4,
+    });
+    const manifest = makeManifest({
+      events: [makeEventDef({ key: 'sponsor_backlash', category: 'market', requires_active_scope: 'sponsor' })],
+    });
+    const withSponsor = makeRunState({
+      roster: [makeClient({ id: clientId })],
+      contracts: [sponsorContract],
+      turn_number: 2,
+    });
+    const events = generateEvents(withSponsor, manifest);
+    const ev = events.find(e => e.template_key === 'sponsor_backlash');
+    expect(ev).toBeDefined();
+    expect(ev?.client_id).toBe(clientId);
+  });
 });
 
 // ─── selectEventTarget ────────────────────────────────────────────────────────
@@ -410,6 +679,21 @@ describe('event — selectEventTarget', () => {
     const result = selectEventTarget(state, 'client', makeManifest());
     // With Math.random=0.01 the first weighted entry (biasedClient) wins
     expect(result).toBe(biasedId);
+  });
+
+  it('weights client events toward artists with more fame', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.99);
+    const unknownId = nextId();
+    const starId = nextId();
+    const state = makeRunState({
+      reputation: 80,
+      roster: [
+        makeClient({ id: unknownId, audience: 500, turns_on_roster: 0 }),
+        makeClient({ id: starId, audience: 1_000_000, arc_stage: 'peak', turns_on_roster: 20 }),
+      ],
+    });
+    const result = selectEventTarget(state, 'client', makeManifest());
+    expect(result).toBe(starId);
   });
 });
 

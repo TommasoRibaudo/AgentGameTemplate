@@ -10,37 +10,43 @@ import {
   grantTrait,
   signClient,
   releaseClient,
-  FOG_FLOOR_HARD,
-  FOG_FLOOR_SOFT,
+  applyAudienceDecay,
+  generateProspects,
+  AUDIENCE_DECAY_RATE,
+  PROSPECT_LIFESPAN,
 } from '../client';
 import { makeClient, makeClientStats, makeFoggedStat, makeRunState, makeManifest, makeAgentState, nextId } from './fixtures';
 import { TraitDefinition } from '../../types/manifest';
-import { Client } from '../../types/client';
+import { Client, Prospect } from '../../types/client';
+import { Campaign } from '../../types/campaign';
+import { ArcStage } from '../../types/primitives';
+import { MUSIC_MANIFEST } from '../../manifest/variants/music';
 
 // ─── computeObservedStat ──────────────────────────────────────────────────────
 
 describe('client — computeObservedStat', () => {
   const baseAgent = makeAgentState();
 
-  it('talent band never falls below FOG_FLOOR_HARD', () => {
-    // Max out all narrowing sources: skill=7 (contrib=14), invested=600 (contrib=12), tenure=16 (contrib=8)
+  it('talent can be perfectly known at max scouting', () => {
+    // skill=7 (contrib=14) + invested=600 (contrib=12) + tenure=20 (contrib=20) = 46 > initialHalf 35
     const stat = makeFoggedStat(60, { scouting_invested: 600 });
     const { observed_min, observed_max } = computeObservedStat(
       stat, 'talent',
       makeAgentState({ stats: { stat_scouting: 7, insight_scouting: 0, negotiation: 0, operations: 0, coaching: 0 } }),
-      16,
+      20,
     );
-    expect(observed_max - observed_min).toBeGreaterThanOrEqual(FOG_FLOOR_HARD * 2);
+    expect(observed_min).toBe(observed_max);
   });
 
-  it('non-talent stats can reach FOG_FLOOR_SOFT floor', () => {
+  it('non-talent stats can be perfectly known at max scouting', () => {
+    // invested=600 (contrib=12) + tenure=20 (contrib=30) = 42 > initialHalf 40
     const stat = makeFoggedStat(60, { scouting_invested: 600 });
     const { observed_min, observed_max } = computeObservedStat(
       stat, 'form',
-      makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 7, negotiation: 0, operations: 0, coaching: 0 } }),
-      16,
+      makeAgentState({ stats: { stat_scouting: 0, insight_scouting: 0, negotiation: 0, operations: 0, coaching: 0 } }),
+      20,
     );
-    expect(observed_max - observed_min).toBeGreaterThanOrEqual(FOG_FLOOR_SOFT * 2);
+    expect(observed_min).toBe(observed_max);
   });
 
   it('fog narrows as scouting_invested increases', () => {
@@ -271,15 +277,18 @@ describe('client — checkTraitGrant', () => {
 
 // ─── refreshProspectFog ───────────────────────────────────────────────────────
 
-const makeProspect = (overrides?: Partial<{ id: string; name: string; arc_stage: 'rising' | 'peak' | 'declining'; audience: number; scouting_invested: number; max_potential: number }>) => ({
-  id:                overrides?.id ?? nextId(),
-  name:              overrides?.name ?? 'Test Prospect',
-  arc_stage:         (overrides?.arc_stage ?? 'rising') as 'rising' | 'peak' | 'declining',
-  audience:          overrides?.audience ?? 5_000,
-  stats:             makeClientStats(),
-  scouting_invested: overrides?.scouting_invested ?? 0,
-  max_potential:     overrides?.max_potential ?? 80,
-});
+const makeProspect = (overrides?: Partial<Prospect>) => ({
+  id:                         overrides?.id ?? nextId(),
+  name:                       overrides?.name ?? 'Test Prospect',
+  age_weeks:                  overrides?.age_weeks ?? 20 * 52,
+  arc_stage:                  (overrides?.arc_stage ?? 'rising') as ArcStage,
+  audience:                   overrides?.audience ?? 5_000,
+  stats:                      overrides?.stats ?? makeClientStats(),
+  scouting_invested:          overrides?.scouting_invested ?? 0,
+  max_potential:               overrides?.max_potential ?? 80,
+  expires_in:                 overrides?.expires_in ?? 10,
+  generated_at_reputation:    overrides?.generated_at_reputation ?? 0,
+} as Prospect);
 
 describe('client — refreshProspectFog', () => {
   it('returns updated prospect with recalculated fog', () => {
@@ -314,6 +323,59 @@ describe('client — refreshProspectFog', () => {
 });
 
 // ─── investScouting ───────────────────────────────────────────────────────────
+
+describe('client — generateProspects', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('starts low-reputation artists with local-scene audience numbers', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.99);
+    const prospects = generateProspects(3, new Set(), 20);
+    expect(prospects).toHaveLength(3);
+    for (const prospect of prospects) {
+      expect(prospect.audience).toBeLessThanOrEqual(2_000);
+      expect(prospect.audience).toBeGreaterThanOrEqual(50);
+    }
+  });
+
+  it('still gives higher-reputation scouting pools larger audiences', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const lowRep = generateProspects(1, new Set(), 10)[0];
+    const highRep = generateProspects(1, new Set(), 75)[0];
+    expect(highRep.audience).toBeGreaterThan(lowRep.audience);
+  });
+
+  it('generates higher-quality prospects in later turns than turn 1', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.99);
+    const earlyProspect = generateProspects(1, new Set(), 50, 1)[0];
+    const lateProspect  = generateProspects(1, new Set(), 50, 50)[0];
+    expect(lateProspect.stats.talent.true_value).toBeGreaterThan(earlyProspect.stats.talent.true_value);
+  });
+
+  it('generates higher-quality prospects for agents with better scouting', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.99);
+    const noScout   = generateProspects(1, new Set(), 50, 1, 0, 0)[0];
+    const goodScout = generateProspects(1, new Set(), 50, 1, 6, 6)[0];
+    expect(goodScout.stats.talent.true_value).toBeGreaterThan(noScout.stats.talent.true_value);
+  });
+
+  it('generates rising prospects with rising-stage ages', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const prospect = generateProspects(1, new Set(), 50)[0];
+    expect(prospect.arc_stage).toBe('rising');
+    expect(prospect.age_weeks).toBeGreaterThanOrEqual(16 * 52);
+    expect(prospect.age_weeks).toBeLessThan(24 * 52);
+  });
+
+  it('stamps expires_in with PROSPECT_LIFESPAN', () => {
+    const prospect = generateProspects(1, new Set(), 50)[0];
+    expect(prospect.expires_in).toBe(PROSPECT_LIFESPAN);
+  });
+
+  it('stamps generated_at_reputation with the supplied reputation', () => {
+    const prospect = generateProspects(1, new Set(), 60)[0];
+    expect(prospect.generated_at_reputation).toBe(60);
+  });
+});
 
 describe('client — investScouting', () => {
   it('increases scouting_invested on the target stat', () => {
@@ -412,7 +474,7 @@ describe('client — signClient', () => {
     const contractId = nextId();
     const prospect = makeProspect({ id: prospectId });
     const state = makeRunState({ prospects: [prospect] });
-    const result = signClient(state, prospectId, contractId, makeAgentState());
+    const result = signClient(state, prospectId, contractId, makeAgentState(), makeManifest());
     expect(result.roster).toHaveLength(1);
     expect(result.roster[0].id).toBe(prospectId);
     expect(result.prospects).toHaveLength(0);
@@ -423,7 +485,7 @@ describe('client — signClient', () => {
     const contractId = nextId();
     const prospect = makeProspect({ id: prospectId });
     const state = makeRunState({ prospects: [prospect] });
-    const result = signClient(state, prospectId, contractId, makeAgentState());
+    const result = signClient(state, prospectId, contractId, makeAgentState(), makeManifest());
     expect(result.roster[0].agent_contract_id).toBe(contractId);
   });
 
@@ -432,24 +494,97 @@ describe('client — signClient', () => {
     const contractId = nextId();
     const prospect = makeProspect({ id: prospectId, audience: 12_345 });
     const state = makeRunState({ prospects: [prospect] });
-    const result = signClient(state, prospectId, contractId, makeAgentState());
+    const result = signClient(state, prospectId, contractId, makeAgentState(), makeManifest());
     expect(result.roster[0].audience).toBe(12_345);
+  });
+
+  it('preserves age when promoting a prospect', () => {
+    const prospectId = nextId();
+    const contractId = nextId();
+    const prospect = makeProspect({ id: prospectId, age_weeks: (22 * 52) + 13 });
+    const state = makeRunState({ prospects: [prospect] });
+    const result = signClient(state, prospectId, contractId, makeAgentState(), makeManifest());
+    expect(result.roster[0].age_weeks).toBe(prospect.age_weeks);
   });
 
   it('updates existing contract client_id to match the signed prospect', () => {
     const prospectId = nextId();
     const contractId = nextId();
     const prospect = makeProspect({ id: prospectId });
-    const contract = { id: contractId, tier: 'agent_client' as const, client_id: 'placeholder', entity_id: null, payout_type: 'per_month' as const, your_cut: 15, amount: 0, duration_remaining: 12, objectives: [], obligations_per_turn: 200, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject', expires_in: null, turns_active: 0 };
+    const contract = { id: contractId, tier: 'agent_client' as const, client_id: 'placeholder', entity_id: null, payout_type: 'per_week' as const, your_cut: 15, amount: 0, duration_remaining: 12, objectives: [], obligations_per_turn: 200, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject', expires_in: null, exclusivity_scope: null, turns_active: 0, album_option: null };
     const state = makeRunState({ prospects: [prospect], contracts: [contract] });
-    const result = signClient(state, prospectId, contractId, makeAgentState());
+    const result = signClient(state, prospectId, contractId, makeAgentState(), makeManifest());
     expect(result.contracts[0].client_id).toBe(prospectId);
   });
 
   it('returns state unchanged for an unknown prospect id', () => {
     const state = makeRunState();
-    const result = signClient(state, 'unknown_id', 'ctr_x', makeAgentState());
+    const result = signClient(state, 'unknown_id', 'ctr_x', makeAgentState(), makeManifest());
     expect(result).toBe(state);
+  });
+});
+
+// ─── signClient — pre-signing history ─────────────────────────────────────────
+
+describe('client — signClient pre-signing history', () => {
+  it('generates no history for a brand-new artist (audience < 900)', () => {
+    const prospectId = nextId();
+    const prospect = makeProspect({ id: prospectId, audience: 500 });
+    const state = makeRunState({ prospects: [prospect] });
+    const result = signClient(state, prospectId, 'ctr', makeAgentState(), MUSIC_MANIFEST);
+    expect(result.roster[0].campaign_history).toHaveLength(0);
+    expect(result.roster[0].catalog_releases).toHaveLength(0);
+  });
+
+  it('generates at least one past campaign for an artist with audience >= 900', () => {
+    const prospectId = nextId();
+    const prospect = makeProspect({ id: prospectId, audience: 1_000 });
+    const state = makeRunState({ prospects: [prospect] });
+    const result = signClient(state, prospectId, 'ctr', makeAgentState(), MUSIC_MANIFEST);
+    expect(result.roster[0].campaign_history.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('generates a catalog release for an artist with audience >= 1400', () => {
+    const prospectId = nextId();
+    const prospect = makeProspect({ id: prospectId, audience: 1_600 });
+    const state = makeRunState({ prospects: [prospect] });
+    const result = signClient(state, prospectId, 'ctr', makeAgentState(), MUSIC_MANIFEST);
+    expect(result.roster[0].catalog_releases.length).toBeGreaterThanOrEqual(1);
+    const release = result.roster[0].catalog_releases[0];
+    expect(release.turns_since_release).toBeGreaterThan(0);
+    expect(release.is_selling_albums).toBe(false);
+  });
+
+  it('campaign_history release_id links to an entry in catalog_releases', () => {
+    const prospectId = nextId();
+    const prospect = makeProspect({ id: prospectId, audience: 1_600 });
+    const state = makeRunState({ prospects: [prospect] });
+    const result = signClient(state, prospectId, 'ctr', makeAgentState(), MUSIC_MANIFEST);
+    const releaseIds = new Set(result.roster[0].catalog_releases.map(r => r.id));
+    for (const h of result.roster[0].campaign_history) {
+      if (h.release_id !== null) {
+        expect(releaseIds.has(h.release_id)).toBe(true);
+      }
+    }
+  });
+
+  it('past campaigns use negative turn numbers', () => {
+    const prospectId = nextId();
+    const prospect = makeProspect({ id: prospectId, audience: 1_000 });
+    const state = makeRunState({ prospects: [prospect] });
+    const result = signClient(state, prospectId, 'ctr', makeAgentState(), MUSIC_MANIFEST);
+    for (const h of result.roster[0].campaign_history) {
+      expect(h.completed_turn).toBeLessThan(0);
+      expect(h.started_turn).toBeLessThan(h.completed_turn);
+    }
+  });
+
+  it('audience is preserved regardless of generated history', () => {
+    const prospectId = nextId();
+    const prospect = makeProspect({ id: prospectId, audience: 2_000 });
+    const state = makeRunState({ prospects: [prospect] });
+    const result = signClient(state, prospectId, 'ctr', makeAgentState(), MUSIC_MANIFEST);
+    expect(result.roster[0].audience).toBe(2_000);
   });
 });
 
@@ -466,17 +601,45 @@ describe('client — releaseClient', () => {
     const clientId = nextId();
     const contractId = nextId();
     const client = makeClient({ id: clientId, agent_contract_id: contractId });
-    const contract = { id: contractId, tier: 'agent_client' as const, client_id: clientId, entity_id: null, payout_type: 'per_month' as const, your_cut: 15, amount: 0, duration_remaining: 6, objectives: [], obligations_per_turn: 200, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject' as const, expires_in: null, turns_active: 0 };
+    const contract = { id: contractId, tier: 'agent_client' as const, client_id: clientId, entity_id: null, payout_type: 'per_week' as const, your_cut: 15, amount: 0, duration_remaining: 6, objectives: [], obligations_per_turn: 200, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject' as const, expires_in: null, exclusivity_scope: null, turns_active: 0, album_option: null };
     const state = makeRunState({ roster: [client], contracts: [contract] });
     const result = releaseClient(state, clientId, makeManifest());
     expect(result.roster).toHaveLength(0);
+  });
+
+  it('removes active campaigns for the released client', () => {
+    const clientId = nextId();
+    const otherClientId = nextId();
+    const client = makeClient({ id: clientId, active_campaign_id: 'camp_release' });
+    const otherClient = makeClient({ id: otherClientId, active_campaign_id: 'camp_keep' });
+    const campaign: Campaign = {
+      id: 'camp_release',
+      client_id: clientId,
+      type_key: 'test_campaign',
+      total_turns: 4,
+      turns_remaining: 2,
+      installment_results: [],
+      pending_objective_ids: [],
+    };
+    const otherCampaign: Campaign = {
+      id: 'camp_keep',
+      client_id: otherClientId,
+      type_key: 'test_campaign',
+      total_turns: 4,
+      turns_remaining: 2,
+      installment_results: [],
+      pending_objective_ids: [],
+    };
+    const state = makeRunState({ roster: [client, otherClient], campaigns: [campaign, otherCampaign] });
+    const result = releaseClient(state, clientId, makeManifest());
+    expect(result.campaigns).toEqual([otherCampaign]);
   });
 
   it('applies severance and rep penalty when contract is active', () => {
     const clientId = nextId();
     const contractId = nextId();
     const client = makeClient({ id: clientId, agent_contract_id: contractId });
-    const contract = { id: contractId, tier: 'agent_client' as const, client_id: clientId, entity_id: null, payout_type: 'per_month' as const, your_cut: 15, amount: 0, duration_remaining: 6, objectives: [], obligations_per_turn: 500, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject' as const, expires_in: null, turns_active: 0 };
+    const contract = { id: contractId, tier: 'agent_client' as const, client_id: clientId, entity_id: null, payout_type: 'per_week' as const, your_cut: 15, amount: 0, duration_remaining: 6, objectives: [], obligations_per_turn: 500, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject' as const, expires_in: null, exclusivity_scope: null, turns_active: 0, album_option: null };
     const state = makeRunState({ money: 5_000, reputation: 50, roster: [client], contracts: [contract] });
     const result = releaseClient(state, clientId, makeManifest());
     // severance = 500 * 2 = 1000
@@ -498,7 +661,7 @@ describe('client — releaseClient', () => {
     const clientId = nextId();
     const contractId = nextId();
     const client = makeClient({ id: clientId, agent_contract_id: contractId });
-    const contract = { id: contractId, tier: 'agent_client' as const, client_id: clientId, entity_id: null, payout_type: 'per_month' as const, your_cut: 15, amount: 0, duration_remaining: 0, objectives: [], obligations_per_turn: 500, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject' as const, expires_in: null, turns_active: 0 };
+    const contract = { id: contractId, tier: 'agent_client' as const, client_id: clientId, entity_id: null, payout_type: 'per_week' as const, your_cut: 15, amount: 0, duration_remaining: 0, objectives: [], obligations_per_turn: 500, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject' as const, expires_in: null, exclusivity_scope: null, turns_active: 0, album_option: null };
     const state = makeRunState({ money: 5_000, reputation: 50, roster: [client], contracts: [contract] });
     const result = releaseClient(state, clientId, makeManifest());
     expect(result.money).toBe(5_000);
@@ -510,8 +673,8 @@ describe('client — releaseClient', () => {
     const contractId = nextId();
     const otherContractId = nextId();
     const client = makeClient({ id: clientId, agent_contract_id: contractId });
-    const agentContract = { id: contractId, tier: 'agent_client' as const, client_id: clientId, entity_id: null, payout_type: 'per_month' as const, your_cut: 15, amount: 0, duration_remaining: 6, objectives: [], obligations_per_turn: 200, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject' as const, expires_in: null, turns_active: 0 };
-    const otherContract  = { id: otherContractId, tier: 'agent_client' as const, client_id: 'other', entity_id: null, payout_type: 'per_month' as const, your_cut: 15, amount: 0, duration_remaining: 6, objectives: [], obligations_per_turn: 200, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject' as const, expires_in: null, turns_active: 0 };
+    const agentContract = { id: contractId, tier: 'agent_client' as const, client_id: clientId, entity_id: null, payout_type: 'per_week' as const, your_cut: 15, amount: 0, duration_remaining: 6, objectives: [], obligations_per_turn: 200, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject' as const, expires_in: null, exclusivity_scope: null, turns_active: 0, album_option: null };
+    const otherContract  = { id: otherContractId, tier: 'agent_client' as const, client_id: 'other', entity_id: null, payout_type: 'per_week' as const, your_cut: 15, amount: 0, duration_remaining: 6, objectives: [], obligations_per_turn: 200, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject' as const, expires_in: null, exclusivity_scope: null, turns_active: 0, album_option: null };
     const state = makeRunState({ roster: [client], contracts: [agentContract, otherContract] });
     const result = releaseClient(state, clientId, makeManifest());
     expect(result.contracts.find(c => c.id === contractId)?.duration_remaining).toBe(0);
@@ -527,11 +690,59 @@ describe('client — signClient contracts.map branch', () => {
     const contractId = nextId();
     const otherContractId = nextId();
     const prospect = makeProspect({ id: prospectId });
-    const mainContract  = { id: contractId,      tier: 'agent_client' as const, client_id: 'placeholder',   entity_id: null, payout_type: 'per_month' as const, your_cut: 15, amount: 0, duration_remaining: 12, objectives: [], obligations_per_turn: 200, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject', expires_in: null, turns_active: 0 };
-    const otherContract = { id: otherContractId, tier: 'agent_client' as const, client_id: 'other_client', entity_id: null, payout_type: 'per_month' as const, your_cut: 15, amount: 0, duration_remaining: 12, objectives: [], obligations_per_turn: 200, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject', expires_in: null, turns_active: 0 };
+    const mainContract  = { id: contractId,      tier: 'agent_client' as const, client_id: 'placeholder',   entity_id: null, payout_type: 'per_week' as const, your_cut: 15, amount: 0, duration_remaining: 12, objectives: [], obligations_per_turn: 200, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject', expires_in: null, exclusivity_scope: null, turns_active: 0, album_option: null };
+    const otherContract = { id: otherContractId, tier: 'agent_client' as const, client_id: 'other_client', entity_id: null, payout_type: 'per_week' as const, your_cut: 15, amount: 0, duration_remaining: 12, objectives: [], obligations_per_turn: 200, counterparty_posture: { true_value: 0.5, is_revealed: false, observed_min: null, observed_max: null }, default_on_ignore: 'reject', expires_in: null, exclusivity_scope: null, turns_active: 0, album_option: null };
     const state = makeRunState({ prospects: [prospect], contracts: [mainContract, otherContract] });
-    const result = signClient(state, prospectId, contractId, makeAgentState());
+    const result = signClient(state, prospectId, contractId, makeAgentState(), makeManifest());
     expect(result.contracts.find(c => c.id === contractId)?.client_id).toBe(prospectId);
     expect(result.contracts.find(c => c.id === otherContractId)?.client_id).toBe('other_client');
+  });
+});
+
+// ─── applyAudienceDecay ───────────────────────────────────────────────────────
+
+describe('client — applyAudienceDecay', () => {
+  it('declining clients lose more fans per turn than rising clients', () => {
+    const audience = 50_000;
+    const rising   = applyAudienceDecay(makeClient({ arc_stage: 'rising',   audience }));
+    const declining = applyAudienceDecay(makeClient({ arc_stage: 'declining', audience }));
+    const risingLoss   = audience - rising.audience;
+    const decliningLoss = audience - declining.audience;
+    expect(decliningLoss).toBeGreaterThan(risingLoss);
+  });
+
+  it('peak clients lose fewer fans per turn than declining clients', () => {
+    const audience = 50_000;
+    const peak     = applyAudienceDecay(makeClient({ arc_stage: 'peak',     audience }));
+    const declining = applyAudienceDecay(makeClient({ arc_stage: 'declining', audience }));
+    expect(audience - peak.audience).toBeLessThan(audience - declining.audience);
+  });
+
+  it('loss is proportional to audience size (larger audience → larger loss)', () => {
+    const small = applyAudienceDecay(makeClient({ arc_stage: 'declining', audience: 10_000 }));
+    const large = applyAudienceDecay(makeClient({ arc_stage: 'declining', audience: 200_000 }));
+    expect(10_000  - small.audience).toBeLessThan(200_000 - large.audience);
+  });
+
+  it('audience never goes below zero', () => {
+    const result = applyAudienceDecay(makeClient({ arc_stage: 'declining', audience: 0 }));
+    expect(result.audience).toBe(0);
+  });
+
+  it('returns the same client reference when loss rounds to zero', () => {
+    // audience so small that rate * audience < 0.5 → rounds to 0
+    const client = makeClient({ arc_stage: 'rising', audience: 10 });
+    const result = applyAudienceDecay(client);
+    expect(result).toBe(client);
+  });
+
+  it('decay rates match the exported constants for each stage', () => {
+    const audience = 100_000;
+    (['rising', 'peak', 'declining'] as const).forEach(stage => {
+      const client = makeClient({ arc_stage: stage, audience });
+      const result = applyAudienceDecay(client);
+      const expected = Math.round(audience * AUDIENCE_DECAY_RATE[stage]);
+      expect(audience - result.audience).toBe(expected);
+    });
   });
 });

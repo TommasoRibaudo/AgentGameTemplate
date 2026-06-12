@@ -8,6 +8,12 @@ export interface DecisionOutcome {
   morale_delta: number;
   // if the outcome creates or activates a contract, its ID is set here post-resolution
   activates_contract_id: string | null;
+  // if set, immediately terminates the active contract with this exclusivity_scope for the item's client
+  terminate_contract_scope?: string | null;
+  // if set, starts a campaign of this type for the item's client
+  start_campaign_key?: string | null;
+  // if set, generates a new prospect and adds them to the scouting pool
+  add_prospect?: boolean | null;
 }
 
 export interface RandomDecisionOutcome {
@@ -37,6 +43,7 @@ export interface DecisionOption {
   random_outcomes?: RandomDecisionOutcome[];
   // only present on the 'push' option
   push_risk: PushRisk | null;
+  result_description?: string | null;
 }
 
 export interface DecisionItem {

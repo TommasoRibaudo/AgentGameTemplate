@@ -6,3 +6,5 @@ export * from './ClientRow';
 export * from './ContractSummary';
 export * from './DecisionCard';
 export * from './EventModal';
+export * from './RunEventOverlay';
+export * from './ReleaseSummaryModal';

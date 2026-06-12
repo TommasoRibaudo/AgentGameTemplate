@@ -4,6 +4,10 @@ export interface EventOutcome {
   money_delta: number;
   reputation_delta: number;
   stat_deltas: StatDeltas;
+  // Campaign-linked release events can improve or hurt the pending release asset.
+  release_quality_delta?: number;
+  // Campaign-linked events can end the active campaign without running completion payouts.
+  cancels_campaign?: boolean;
   // windfall events can inject a high-value item directly onto the decision board
   injects_board_item_key: string | null;
 }
@@ -12,6 +16,7 @@ export interface EventOption {
   key: string;
   label: string;
   outcome: EventOutcome;
+  result_description?: string | null;
 }
 
 export interface GameEvent {

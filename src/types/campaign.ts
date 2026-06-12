@@ -13,10 +13,11 @@ export interface CampaignInstallmentResult {
   // if the installment triggered a new event or trait, record it here
   triggered_event_id: string | null;
   triggered_trait_id: string | null;
+  audience_gain: number;
 }
 
 export type CampaignSize = 'small' | 'medium' | 'large';
-export type ReleaseKind = 'album' | 'single';
+export type ReleaseKind = 'album' | 'single' | 'mixtape';
 
 export interface ReleaseSong {
   id: string;
@@ -74,6 +75,17 @@ export interface CampaignHistoryItem {
   visible_notes: string[];
 }
 
+export interface ReleaseSummaryNotification {
+  id: string;
+  client_id: string;
+  client_name: string;
+  campaign_label: string;
+  release_title: string;
+  release_kind: ReleaseKind;
+  avg_quality: number;
+  initial_revenue: number;
+}
+
 export interface CatalogRelease {
   id: string;
   campaign_id: string;
@@ -90,5 +102,7 @@ export interface CatalogRelease {
   latest_turn_album_units: number;
   latest_turn_streams: number;
   latest_turn_income: number;
+  latest_turn_fan_gain: number;
+  total_fan_gain: number;
   is_selling_albums: boolean;
 }

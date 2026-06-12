@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RunState } from '../types/run';
+import { Contract } from '../types/contract';
 import { CompletedRunRecord } from './useMetaStore';
 import { useRunStore } from './useRunStore';
 import { useMetaStore } from './useMetaStore';
@@ -14,7 +15,7 @@ const RUN_KEY  = 'run_active';
 const META_KEY = 'meta';
 
 // Bump when serialized shape changes incompatibly; triggers a clean slate.
-const SAVE_VERSION = 2;
+const SAVE_VERSION = 3;
 
 interface RunSavePayload {
   version: number;
@@ -53,6 +54,22 @@ export async function loadRun(): Promise<RunState | null> {
   return {
     ...payload.state,
     player_name: payload.state.player_name ?? 'Manager',
+    pinned_client_ids: payload.state.pinned_client_ids ?? [],
+    dismissed_auto_client_ids: payload.state.dismissed_auto_client_ids ?? [],
+    fired_one_time_keys: payload.state.fired_one_time_keys ?? [],
+    narrator_pacing: payload.state.narrator_pacing ?? { consecutive_skipped_turns: 0, last_turn_skipped_items: 0 },
+    tutorial_step:        payload.state.tutorial_step        ?? null,
+    tutorial_friend_id:   payload.state.tutorial_friend_id   ?? null,
+    tutorial_prospect_id: payload.state.tutorial_prospect_id ?? null,
+    pending_release_summaries: payload.state.pending_release_summaries ?? [],
+    contracts: (payload.state.contracts ?? []).map((c: Contract) => ({
+      ...c,
+      album_option: ((c as unknown) as Record<string, unknown>).album_option as Contract['album_option'] ?? null,
+    })),
+    news_feed: (payload.state.news_feed ?? []).map(item => ({
+      ...item,
+      fan_delta: ((item as unknown) as Record<string, unknown>).fan_delta as number | null ?? null,
+    })),
   };
 }
 
@@ -137,7 +154,10 @@ export function useHydrateStores(): { hydrating: boolean } {
         // variant_id may be absent in saves written before this field was added
         const variantId = (savedRun as RunState & { variant_id?: string }).variant_id ?? DEFAULT_MANIFEST_ID;
         const manifest  = MANIFEST_REGISTRY[variantId] ?? MANIFEST_REGISTRY[DEFAULT_MANIFEST_ID];
-        if (manifest) loadExistingRun(savedRun, manifest);
+        if (manifest) {
+          loadExistingRun(savedRun, manifest);
+          useRunStore.getState().restartTutorialAfterHydration();
+        }
       }
       if (savedMeta) {
         hydrateMeta(savedMeta);

@@ -6,12 +6,16 @@ import {
   CampaignSize,
   CatalogRelease,
   CreativeReleasePlan,
+  ReleaseSummaryNotification,
   ReleaseKind,
 } from '../types/campaign';
-import { RunState } from '../types/run';
-import { VariantManifest } from '../types/manifest';
+import { RunState, NewsItem } from '../types/run';
+import { CampaignCategoryDefinition, VariantManifest } from '../types/manifest';
+import { Client } from '../types/client';
+import { Contract } from '../types/contract';
 import { grantTrait, checkTraitGrant, applyClientStatDeltas, refreshClientFog } from './client';
 import { computeAgencyPayout, getAgentCutPercent } from './resource';
+import { injectAlbumOptionDecision } from './decision-queue';
 
 // INVARIANTS (PRD §3.5):
 // - One installment resolves per turn during Upkeep.
@@ -26,10 +30,21 @@ const SIZE_CONFIG: Record<CampaignSize, {
   audience: number;
   eventRisk: number;
   budget: number;
+  // audience below this applies a roll penalty; 0 = no gate
+  audience_gate: number;
+  // maximum roll penalty (applied at 0 audience)
+  audience_penalty_max: number;
 }> = {
-  small:  { payout: 0.75, audience: 0.75, eventRisk: 0.75, budget: 0.65 },
-  medium: { payout: 1.00, audience: 1.00, eventRisk: 1.00, budget: 1.00 },
-  large:  { payout: 1.45, audience: 1.60, eventRisk: 1.50, budget: 1.70 },
+  small:  { payout: 0.75, audience: 0.75, eventRisk: 0.75, budget: 0.65, audience_gate: 0,      audience_penalty_max: 0  },
+  medium: { payout: 1.00, audience: 1.00, eventRisk: 1.00, budget: 1.00, audience_gate: 5_000,  audience_penalty_max: 15 },
+  large:  { payout: 1.45, audience: 1.60, eventRisk: 1.50, budget: 1.70, audience_gate: 50_000, audience_penalty_max: 30 },
+};
+
+// Exported so the UI can display audience warnings without duplicating thresholds
+export const SIZE_AUDIENCE_GATES: Readonly<Record<CampaignSize, number>> = {
+  small:  SIZE_CONFIG.small.audience_gate,
+  medium: SIZE_CONFIG.medium.audience_gate,
+  large:  SIZE_CONFIG.large.audience_gate,
 };
 
 const SONG_TITLE_PARTS = [
@@ -52,12 +67,14 @@ export type BuildCampaignSetup = (
   size?: CampaignSize,
   length?: number,
   budget?: number,
+  budgetFloors?: Partial<Record<CampaignSize, number>>,
 ) => CampaignSetup;
 
-export const buildCampaignSetup: BuildCampaignSetup = (typeDef, size = 'medium', length, budget) => {
+export const buildCampaignSetup: BuildCampaignSetup = (typeDef, size = 'medium', length, budget, budgetFloors) => {
   const chosenLength = Math.max(1, Math.round(length ?? typeDef.total_turns));
   const sizeConfig = SIZE_CONFIG[size];
-  const baselineBudget = Math.max(500, Math.round(typeDef.base_payout * chosenLength * 0.25 * sizeConfig.budget));
+  const floorForSize = budgetFloors?.[size] ?? 500;
+  const baselineBudget = Math.max(floorForSize, Math.round(typeDef.base_payout * chosenLength * 0.25 * sizeConfig.budget));
   const chosenBudget = Math.max(0, Math.round(budget ?? baselineBudget));
   const budgetRatio = baselineBudget > 0 ? chosenBudget / baselineBudget : 1;
   const budgetMultiplier = Math.max(0.5, Math.min(1.75, Math.sqrt(Math.max(0.1, budgetRatio))));
@@ -70,6 +87,22 @@ export const buildCampaignSetup: BuildCampaignSetup = (typeDef, size = 'medium',
     audience_multiplier: sizeConfig.audience * budgetMultiplier,
     event_risk_multiplier: sizeConfig.eventRisk * Math.max(0.65, 1.3 - budgetMultiplier * 0.3),
   };
+};
+
+// Derives campaign size from budget relative to the campaign type's medium and large baselines.
+// Budget >= midpoint(medium, large) → large; >= 75% of medium → medium; otherwise small.
+export const deriveCampaignSize = (
+  typeDef: VariantManifest['campaign_types'][number],
+  length: number,
+  budget: number,
+  budgetFloors?: Partial<Record<CampaignSize, number>>,
+): CampaignSize => {
+  const len = Math.max(1, Math.round(length));
+  const medBudget = Math.max(budgetFloors?.medium ?? 500, Math.round(typeDef.base_payout * len * 0.25 * SIZE_CONFIG.medium.budget));
+  const lgBudget  = Math.max(budgetFloors?.large  ?? 1_000, Math.round(typeDef.base_payout * len * 0.25 * SIZE_CONFIG.large.budget));
+  if (budget >= Math.round((medBudget + lgBudget) / 2)) return 'large';
+  if (budget >= Math.round(medBudget * 0.75))           return 'medium';
+  return 'small';
 };
 
 const getCampaignSetup = (
@@ -106,7 +139,56 @@ const computeEffectiveMarketability = (marketability: number, audience: number):
   clamp(marketability + computeFanMarketabilityBonus(audience), 0, 100);
 
 const isReleaseCampaign = (typeDef: VariantManifest['campaign_types'][number]): typeDef is VariantManifest['campaign_types'][number] & { release_kind: ReleaseKind } =>
-  typeDef.release_kind === 'album' || typeDef.release_kind === 'single';
+  typeDef.release_kind === 'album' || typeDef.release_kind === 'single' || typeDef.release_kind === 'mixtape';
+
+const RISING_TALENT_GROWTH_CAMPAIGNS = new Set(['perform_gigs', 'mixtape_drop']);
+const TALENT_GROWTH_BASE_CHANCE = 0.15;
+const TALENT_GROWTH_CHANCE_PER_COACHING = 0.10;
+
+const rollRisingCampaignTalentDelta = (
+  client: RunState['roster'][number],
+  campaignTypeKey: string,
+  coaching: number,
+): number => {
+  if (client.arc_stage !== 'rising') return 0;
+  if (!RISING_TALENT_GROWTH_CAMPAIGNS.has(campaignTypeKey)) return 0;
+  if (client.stats.talent.true_value >= client.max_potential) return 0;
+  const chance = clamp(TALENT_GROWTH_BASE_CHANCE + coaching * TALENT_GROWTH_CHANCE_PER_COACHING, 0, 0.85);
+  return Math.random() < chance ? 1 : 0;
+};
+
+export const clientHasActiveLabelContract = (state: RunState, clientId: string): boolean =>
+  state.contracts.some(
+    c => c.client_id === clientId && c.tier === 'client_entity' && c.exclusivity_scope === 'label' && c.duration_remaining > 0,
+  );
+
+export const clientMeetsCampaignContractRequirements = (
+  state: RunState,
+  clientId: string,
+  typeDef: VariantManifest['campaign_types'][number],
+): boolean =>
+  !typeDef.requires_label_contract || clientHasActiveLabelContract(state, clientId);
+
+export const resolveCampaignCategory = (
+  categoryDef: CampaignCategoryDefinition,
+  client: Client,
+  activeContracts: Contract[],
+  length: number,
+): { type_key: string; size_names: Record<CampaignSize, string> } | null => {
+  const hasLabel = activeContracts.some(
+    c => c.client_id === client.id && c.tier === 'client_entity' && c.exclusivity_scope === 'label' && c.duration_remaining > 0,
+  );
+  for (const rule of categoryDef.routing_rules) {
+    const { conditions } = rule;
+    if (conditions.has_label !== undefined && conditions.has_label !== hasLabel) continue;
+    if (conditions.min_audience !== undefined && client.audience < conditions.min_audience) continue;
+    if (conditions.min_turns !== undefined && length < conditions.min_turns) continue;
+    if (conditions.max_turns !== undefined && length > conditions.max_turns) continue;
+    if (conditions.valid_arc_stages !== undefined && !conditions.valid_arc_stages.includes(client.arc_stage)) continue;
+    return { type_key: rule.type_key, size_names: rule.size_names };
+  }
+  return null;
+};
 
 const generatedSongTitle = (used: Set<string>): string => {
   for (let i = 0; i < 20; i++) {
@@ -133,7 +215,7 @@ const buildReleasePlan = (
 
   const songCount = typeDef.release_kind === 'single'
     ? 1
-    : setup.size === 'large' ? 12 : setup.size === 'small' ? 8 : 10;
+    : setup.size === 'large' ? 16 : setup.size === 'small' ? 5 : 10;
   const usedTitles = new Set<string>();
   const title = typeDef.release_kind === 'single'
     ? generatedSongTitle(usedTitles)
@@ -179,8 +261,14 @@ export const rollInstallment: RollInstallment = (state, campaignId, manifest) =>
   );
   const effectiveForm = Math.max(0, Math.min(100, client.stats.form.true_value + formModifierFromTraits));
 
+  // Audience-adequacy penalty: unknown artists running oversized campaigns roll worse.
+  const audienceGate    = SIZE_CONFIG[setup.size].audience_gate;
+  const audiencePenalty = audienceGate > 0 && client.audience < audienceGate
+    ? Math.round(((audienceGate - client.audience) / audienceGate) * SIZE_CONFIG[setup.size].audience_penalty_max)
+    : 0;
+
   const formContrib = effectiveForm * typeDef.form_weight;
-  const raw         = normalRandom(formContrib, typeDef.variance);
+  const raw         = normalRandom(formContrib - audiencePenalty, typeDef.variance);
   const roll_result = Math.max(0, Math.min(100, Math.round(raw)));
 
   // Determine outcome_key from roll
@@ -191,14 +279,14 @@ export const rollInstallment: RollInstallment = (state, campaignId, manifest) =>
   // Per-installment stat deltas from campaign type definition
   const stat_deltas = typeDef.per_installment_stat_deltas;
 
-  // Money: proportional to roll for per_month; 0 for lump/objective (paid at close)
+  // Money: proportional to roll for per_week; 0 for lump/objective (paid at close)
   const releaseCampaign = isReleaseCampaign(typeDef);
-  const money_delta = !releaseCampaign && typeDef.payout_type === 'per_month'
+  const money_delta = !releaseCampaign && typeDef.payout_type === 'per_week'
     ? Math.round((roll_result / 100) * typeDef.base_payout * setup.payout_multiplier)
     : 0;
 
   // Reputation nudge based on outcome
-  const reputation_delta = roll_result >= 70 ? 2 : roll_result < 40 ? -1 : 0;
+  const reputation_delta = roll_result >= 70 ? 3 : roll_result < 40 ? -1 : 0;
 
   const result: CampaignInstallmentResult = {
     turn_number:            state.turn_number,
@@ -209,6 +297,7 @@ export const rollInstallment: RollInstallment = (state, campaignId, manifest) =>
     reputation_delta,
     triggered_event_id:  null,
     triggered_trait_id:  null,
+    audience_gain:       0,
   };
 
   return result;
@@ -329,6 +418,48 @@ export const settleCampaignObjectives: SettleCampaignObjectives = (state, campai
   return { ...s, contracts: updatedContracts };
 };
 
+// ─── Expectation-based fan delta ─────────────────────────────────────────────
+// Expectations are set by the client's personal best (highest average roll across
+// all prior completed campaigns). The dead zone prevents noise from near-average
+// deviations; investment weight means a low-budget 1-turn promo doesn't count for
+// much even if it flops, while a large-budget album campaign does.
+
+const EXPECTATION_DEAD_ZONE = 15;
+const EXPECTATION_TURN_BASELINE = 4;
+const EXPECTATION_BUDGET_BASELINE = 2000;
+const EXPECTATION_AUDIENCE_DIVISOR = 5;
+const EXPECTATION_SCALE = 100;
+
+export const computeExpectationFanDelta = (
+  priorHistory: CampaignHistoryItem[],
+  installmentResults: CampaignInstallmentResult[],
+  totalTurns: number,
+  budget: number,
+  audience: number,
+): number => {
+  const validPrior = priorHistory.filter(h => h.installment_results.length > 0);
+  if (validPrior.length === 0 || installmentResults.length === 0) return 0;
+
+  const currentAvg =
+    installmentResults.reduce((sum, r) => sum + r.roll_result, 0) / installmentResults.length;
+  const personalBest = Math.max(
+    ...validPrior.map(
+      h => h.installment_results.reduce((sum, r) => sum + r.roll_result, 0) / h.installment_results.length,
+    ),
+  );
+
+  const gap = currentAvg - personalBest;
+  if (Math.abs(gap) < EXPECTATION_DEAD_ZONE) return 0;
+
+  const investmentScore = Math.sqrt(
+    Math.max(0.1, (totalTurns / EXPECTATION_TURN_BASELINE) * (budget / EXPECTATION_BUDGET_BASELINE)),
+  );
+  const audienceScale = Math.log10(Math.max(100, audience)) / EXPECTATION_AUDIENCE_DIVISOR;
+  const magnitude = (Math.abs(gap) - EXPECTATION_DEAD_ZONE) * investmentScore * audienceScale * EXPECTATION_SCALE;
+
+  return gap > 0 ? Math.round(magnitude) : -Math.round(magnitude);
+};
+
 // ─── Campaign lifecycle ───────────────────────────────────────────────────────
 
 export type StartCampaign = (
@@ -345,7 +476,25 @@ export const startCampaign: StartCampaign = (state, clientId, campaignTypeKey, l
   if (!typeDef) return state;
   const client = state.roster.find(c => c.id === clientId);
   if (!client || client.active_campaign_id) return state;
-  const setup = buildCampaignSetup(typeDef, setupOptions?.size, setupOptions?.length, setupOptions?.budget);
+  if (!clientMeetsCampaignContractRequirements(state, clientId, typeDef)) return state;
+
+  // Auto-link objectives from a commission-style contract if the campaign type declares a scope.
+  // Also serves as a hard gate: if the scope is configured but no matching contract is active,
+  // the campaign cannot start (there's nothing to deliver against).
+  const autoLinkedIds: string[] = [];
+  if (typeDef.auto_link_contract_scope) {
+    for (const c of state.contracts) {
+      if (c.client_id === clientId && c.exclusivity_scope === typeDef.auto_link_contract_scope && c.duration_remaining > 0) {
+        for (const obj of c.objectives) {
+          if (!obj.is_paid) autoLinkedIds.push(obj.id);
+        }
+      }
+    }
+    if (autoLinkedIds.length === 0) return state;
+  }
+  const allLinkedIds = [...linkedObjectiveIds, ...autoLinkedIds];
+
+  const setup = buildCampaignSetup(typeDef, setupOptions?.size, setupOptions?.length, setupOptions?.budget, manifest.budget_floors);
   if (state.money < setup.budget) return state;
 
   const campaign: Campaign = {
@@ -357,8 +506,21 @@ export const startCampaign: StartCampaign = (state, clientId, campaignTypeKey, l
     total_turns:          setup.length,
     turns_remaining:      setup.length,
     installment_results:  [],
-    pending_objective_ids: linkedObjectiveIds,
+    pending_objective_ids: allLinkedIds,
   };
+
+  const budgetNews: NewsItem[] = setup.budget > 0
+    ? [{
+        id:               `news_cmp_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`,
+        turn_number:      state.turn_number,
+        type:             'campaign_installment',
+        description:      `${client.name}: ${typeDef.label ?? campaignTypeKey.replace(/_/g, ' ')} launch`,
+        money_delta:      -setup.budget,
+        reputation_delta: null,
+        client_id:        clientId,
+        fan_delta:        null,
+      }]
+    : [];
 
   return {
     ...state,
@@ -367,13 +529,18 @@ export const startCampaign: StartCampaign = (state, clientId, campaignTypeKey, l
     roster:    state.roster.map(c =>
       c.id === clientId ? { ...c, active_campaign_id: campaign.id } : c,
     ),
+    news_feed: [...state.news_feed, ...budgetNews],
   };
 };
 
 export type AdvanceCampaigns = (state: RunState, manifest: VariantManifest) => RunState;
 
 export const advanceCampaigns: AdvanceCampaigns = (state, manifest) => {
-  let s = state;
+  const rosterIds = new Set(state.roster.map(c => c.id));
+  let s = {
+    ...state,
+    campaigns: state.campaigns.filter(c => rosterIds.has(c.client_id)),
+  };
 
   for (const campaign of s.campaigns) {
     const typeDef = manifest.campaign_types.find(t => t.key === campaign.type_key);
@@ -383,8 +550,9 @@ export const advanceCampaigns: AdvanceCampaigns = (state, manifest) => {
 
     // Apply stat deltas to client
     const client = s.roster.find(c => c.id === campaign.client_id);
+    let audienceGain = 0;
     if (client) {
-      const audienceGain = isReleaseCampaign(typeDef)
+      audienceGain = isReleaseCampaign(typeDef)
         ? 0
         : computeAudienceGain(client.audience, result.roll_result, client.stats.marketability.true_value, setup.audience_multiplier);
       const updatedStats = Object.keys(result.stat_deltas).length > 0
@@ -407,7 +575,7 @@ export const advanceCampaigns: AdvanceCampaigns = (state, manifest) => {
     const updatedCampaign: Campaign = {
       ...campaign,
       turns_remaining:     campaign.turns_remaining - 1,
-      installment_results: [...campaign.installment_results, result],
+      installment_results: [...campaign.installment_results, { ...result, audience_gain: audienceGain }],
     };
 
     s = { ...s, campaigns: s.campaigns.map(c => c.id === campaign.id ? updatedCampaign : c) };
@@ -430,28 +598,41 @@ const averageSongQuality = (release: Pick<CatalogRelease, 'songs'>): number =>
     ? 50
     : release.songs.reduce((sum, song) => sum + song.quality, 0) / release.songs.length;
 
+// Returns the perform_gigs sales multiplier for a client actively gigging.
+// Rising artists benefit more because their fanbase discovers them through shows.
+const computePerformingBoost = (arcStage: string, audience: number): number => {
+  if (arcStage === 'rising') {
+    return 2.0 + (Math.log10(Math.max(100, audience)) - 2) * 0.2;
+  }
+  return 1.25;
+};
+
 const computeCatalogTurn = (
   release: CatalogRelease,
   audience: number,
   agentCut: number,
+  performBoost: number = 1.0,
 ): { streams: number; streamIncome: number; albumUnits: number; albumIncome: number; fanGain: number; keepSellingAlbums: boolean } => {
   const quality = averageSongQuality(release);
   const qualityLift = 0.35 + quality / 100;
   const fanBaseLift = Math.max(0.75, Math.min(2.25, Math.log10(Math.max(100, audience)) / 4));
-  const songLift = release.kind === 'album'
-    ? release.songs.reduce((sum, song) => sum + song.quality / 100, 0)
-    : qualityLift;
-  const streamDecay = Math.pow(release.kind === 'album' ? 0.88 : 0.91, release.turns_since_release);
+  const songLift = release.kind === 'single'
+    ? qualityLift
+    : release.songs.reduce((sum, song) => sum + song.quality / 100, 0);
+  const streamDecayPower = release.kind === 'single' ? 0.5 : release.kind === 'mixtape' ? 0.6 : 0.7;
+  const streamDecay = 1 / Math.pow(1 + release.turns_since_release, streamDecayPower);
   const albumDecay = Math.pow(0.62, release.turns_since_release);
+  const streamBase = release.kind === 'single' ? 1.6 : release.kind === 'mixtape' ? 0.48 : 0.26;
 
-  const streams = Math.max(0, Math.round(audience * (release.kind === 'album' ? 0.026 : 0.16) * songLift * fanBaseLift * streamDecay));
-  const streamIncome = Math.round(streams * 0.03 * agentCut);
-  const albumUnits = release.kind === 'album' && release.is_selling_albums
-    ? Math.max(0, Math.round(audience * 0.018 * qualityLift * fanBaseLift * albumDecay))
+  const streams = Math.max(0, Math.round(audience * streamBase * songLift * fanBaseLift * streamDecay * performBoost));
+  const streamIncome = Math.round(streams * 0.003 * agentCut);
+  const hasSales = (release.kind === 'album' || release.kind === 'mixtape') && release.is_selling_albums;
+  const albumUnits = hasSales
+    ? Math.max(0, Math.round(audience * 0.018 * qualityLift * fanBaseLift * albumDecay * performBoost))
     : 0;
-  const keepSellingAlbums = release.kind === 'album' && albumUnits >= 10;
+  const keepSellingAlbums = hasSales && albumUnits >= 10;
   const albumIncome = Math.round(albumUnits * 10 * agentCut);
-  const albumFanLift = release.kind === 'album' && release.turns_since_release === 0 ? albumUnits * 0.18 : albumUnits * 0.12;
+  const albumFanLift = hasSales && release.turns_since_release === 0 ? albumUnits * 0.18 : albumUnits * 0.12;
   const fanGain = Math.round((streams / 1000) * (0.25 + quality / 160) + albumFanLift);
 
   return { streams, streamIncome, albumUnits, albumIncome, fanGain, keepSellingAlbums };
@@ -468,9 +649,21 @@ export const collectCatalogIncome: CollectCatalogIncome = (state) => {
     if (releases.length === 0) return client;
 
     const agentCut = getAgentCutPercent(state, client.id) / 100;
+    const isGigging = state.campaigns.some(
+      c => c.client_id === client.id && c.type_key === 'perform_gigs',
+    );
+    const performBoost = isGigging
+      ? computePerformingBoost(client.arc_stage, client.audience)
+      : 1.0;
+    // Boost only the most recently released record (lowest turns_since_release)
+    const latestReleaseId = releases.reduce(
+      (best, r) => !best || r.turns_since_release < best.turns_since_release ? r : best,
+      null as CatalogRelease | null,
+    )?.id ?? null;
     let clientFanGain = 0;
     const updatedReleases = releases.map(release => {
-      const turn = computeCatalogTurn(release, client.audience + clientFanGain, agentCut);
+      const boost = release.id === latestReleaseId ? performBoost : 1.0;
+      const turn = computeCatalogTurn(release, client.audience + clientFanGain, agentCut, boost);
       const income = turn.streamIncome + turn.albumIncome;
       totalIncome += income;
       totalFanGain += turn.fanGain;
@@ -485,6 +678,8 @@ export const collectCatalogIncome: CollectCatalogIncome = (state) => {
         latest_turn_album_units: turn.albumUnits,
         latest_turn_streams: turn.streams,
         latest_turn_income: income,
+        latest_turn_fan_gain: turn.fanGain,
+        total_fan_gain: release.total_fan_gain + turn.fanGain,
         is_selling_albums: turn.keepSellingAlbums,
       };
     });
@@ -495,7 +690,6 @@ export const collectCatalogIncome: CollectCatalogIncome = (state) => {
         ...item,
         summary: {
           ...item.summary,
-          fan_delta: clientFanGain,
           album_units_sold: release.album_units_sold,
           streams: release.total_streams,
           stream_income: release.stream_income_total,
@@ -526,7 +720,7 @@ export const collectCatalogIncome: CollectCatalogIncome = (state) => {
 
 const computeAudienceGain = (currentAudience: number, rollResult: number, marketability: number, multiplier: number): number => {
   const effectiveMarketability = computeEffectiveMarketability(marketability, currentAudience);
-  const base = 250 + effectiveMarketability * 20;
+  const base = 20 + effectiveMarketability * 1.5;
   const performanceMultiplier = rollResult >= 70 ? 2.0 : rollResult >= 40 ? 1.0 : 0.35;
   const scale = Math.max(0.5, Math.min(3, Math.log10(Math.max(10, currentAudience)) / 4));
   return Math.round(base * performanceMultiplier * scale * multiplier);
@@ -562,9 +756,50 @@ export const closeCampaign: CloseCampaign = (state, campaignId, manifest) => {
         latest_turn_album_units: 0,
         latest_turn_streams: 0,
         latest_turn_income: 0,
-        is_selling_albums: campaign.release_plan.kind === 'album',
+        latest_turn_fan_gain: 0,
+        total_fan_gain: 0,
+        is_selling_albums: campaign.release_plan.kind === 'album' || campaign.release_plan.kind === 'mixtape',
       }
     : null;
+
+  // Label advance: paid at close for album releases, representing the label deal settlement.
+  // Scales with song quality, campaign size, and base_payout — rewards investing in a real album.
+  const labelAdvance = (release?.kind === 'album' && typeDef && campaign.setup)
+    ? Math.round(
+        typeDef.base_payout *
+        campaign.total_turns *
+        campaign.setup.payout_multiplier *
+        (0.5 + averageSongQuality(release) / 100) *
+        0.6,
+      )
+    : 0;
+  if (labelAdvance > 0) {
+    s = { ...s, money: s.money + labelAdvance, total_earnings: s.total_earnings + labelAdvance };
+  }
+
+  // Compute expectation delta against prior history before appending the new entry
+  const client = s.roster.find(c => c.active_campaign_id === campaignId);
+  const expectationFanDelta = client
+    ? computeExpectationFanDelta(
+        client.campaign_history ?? [],
+        campaign.installment_results,
+        campaign.total_turns,
+        campaign.setup?.budget ?? EXPECTATION_BUDGET_BASELINE,
+        client.audience,
+      )
+    : 0;
+
+  const expectationNote =
+    expectationFanDelta > 0
+      ? `${expectationFanDelta.toLocaleString()} new fans won over — campaign exceeded expectations.`
+      : expectationFanDelta < 0
+      ? `${Math.abs(expectationFanDelta).toLocaleString()} fans lost — campaign fell short of expectations.`
+      : null;
+
+  const talentDelta = client
+    ? rollRisingCampaignTalentDelta(client, campaign.type_key, s.agent.stats.coaching)
+    : 0;
+
   const history: CampaignHistoryItem = {
     id: campaign.id,
     type_key: campaign.type_key,
@@ -576,19 +811,40 @@ export const closeCampaign: CloseCampaign = (state, campaignId, manifest) => {
     installment_results: campaign.installment_results,
     release_id: releaseId,
     summary: {
-      money_delta: campaign.installment_results.reduce((sum, r) => sum + r.money_delta, 0),
+      money_delta: campaign.installment_results.reduce((sum, r) => sum + r.money_delta, 0) + labelAdvance,
       reputation_delta: campaign.installment_results.reduce((sum, r) => sum + r.reputation_delta, 0),
-      fan_delta: 0,
+      fan_delta: campaign.installment_results.reduce((sum, r) => sum + r.audience_gain, 0) + expectationFanDelta,
       album_units_sold: release?.album_units_sold,
       streams: release?.total_streams,
       stream_income: release?.stream_income_total,
     },
-    visible_notes: campaign.installment_results
-      .filter(r => r.triggered_event_id)
-      .map(r => `A release issue affected the campaign on turn ${r.turn_number}.`),
+    visible_notes: [
+      ...campaign.installment_results
+        .filter(r => r.triggered_event_id)
+        .map(r => `A release issue affected the campaign on turn ${r.turn_number}.`),
+      ...(expectationNote ? [expectationNote] : []),
+    ],
   };
 
-  return {
+  // Album option: if the campaign was a successful album_cycle and the label contract
+  // has an option clause, inject a label_option decision item.
+  const avgRoll = campaign.installment_results.length > 0
+    ? campaign.installment_results.reduce((sum, r) => sum + r.roll_result, 0) / campaign.installment_results.length
+    : 0;
+  const typeDef2 = manifest.campaign_types.find(t => t.key === campaign.type_key);
+  const isAlbumCampaign = typeDef2?.release_kind === 'album';
+  const labelContract = isAlbumCampaign
+    ? s.contracts.find(
+        c => c.client_id === campaign.client_id
+          && c.exclusivity_scope === 'label'
+          && c.duration_remaining > 0
+          && c.album_option !== null
+          && c.album_option !== undefined
+          && avgRoll >= c.album_option.success_threshold,
+      ) ?? null
+    : null;
+
+  let finalState: RunState = {
     ...s,
     campaigns: s.campaigns.filter(c => c.id !== campaignId),
     roster:    s.roster.map(c =>
@@ -596,10 +852,39 @@ export const closeCampaign: CloseCampaign = (state, campaignId, manifest) => {
         ? {
             ...c,
             active_campaign_id: null,
+            audience: Math.max(0, c.audience + expectationFanDelta),
+            stats: talentDelta > 0 ? refreshClientFog(applyClientStatDeltas(c, { talent: talentDelta }, s.agent), s.agent) : c.stats,
             campaign_history: [...(c.campaign_history ?? []), history],
             catalog_releases: release ? [...(c.catalog_releases ?? []), release] : (c.catalog_releases ?? []),
           }
         : c,
     ),
   };
+
+  if (labelContract) {
+    finalState = injectAlbumOptionDecision(finalState, campaign.client_id, labelContract);
+  }
+
+  if (release) {
+    const releasingClient = finalState.roster.find(c => c.id === campaign.client_id);
+    const notification: ReleaseSummaryNotification = {
+      id: `rel_notif_${generateId()}`,
+      client_id: campaign.client_id,
+      client_name: releasingClient?.name ?? 'Client',
+      campaign_label: label,
+      release_title: release.title,
+      release_kind: release.kind,
+      avg_quality: Math.round(averageSongQuality(release)),
+      initial_revenue: labelAdvance,
+    };
+    finalState = {
+      ...finalState,
+      pending_release_summaries: [
+        ...(finalState.pending_release_summaries ?? []),
+        notification,
+      ],
+    };
+  }
+
+  return finalState;
 };

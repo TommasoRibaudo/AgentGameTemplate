@@ -1,7 +1,7 @@
 import { TurnPhase, RunEndCondition } from './primitives';
 import { Client, Prospect } from './client';
 import { Contract } from './contract';
-import { Campaign } from './campaign';
+import { Campaign, ReleaseSummaryNotification } from './campaign';
 import { GameEvent } from './event';
 import { DecisionItem } from './decision';
 import { AgentState } from './agent';
@@ -20,10 +20,25 @@ export interface DebtState {
   bankruptcy_warning_turns_remaining: number | null;
 }
 
+// Tutorial progression — only active for music_v1 runs; null for all other variants.
+export type TutorialStep =
+  | 'friend_pitch'      // Day-1 modal: friend pitches themselves
+  | 'roster_highlight'  // Highlight friend row in Roster
+  | 'campaign_tab'      // Highlight Campaign tab in ClientDetail
+  | 'gig_hint'          // Hint to start a gig
+  | 'end_turn_hint'     // Prompt player to end turn after booking first gig
+  | 'post_gig_hint'     // Navigate to Home, highlight dashboard tab, show decision board
+  | 'scout_hint'             // Navigate to Scout tab, show tutorial prospect, explain scouting
+  | 'scout_signing'          // After scouting, prompt player to sign the tutorial prospect
+  | 'contract_approve_hint'  // Auto-navigate to Home, approve the signing contract
+  | 'agency_hint'            // After signing, navigate to Agency, explain skills/infra/bank
+  | 'done';
+
 // News Feed entries persist so the player can review them from the Turn Open screen.
 // They are append-only within a run.
 export type NewsItemType =
   | 'campaign_installment'
+  | 'campaign_ended'
   | 'income_received'
   | 'client_milestone'
   | 'event_fired'
@@ -33,6 +48,7 @@ export type NewsItemType =
   | 'debt_repayment'
   | 'debt_missed'
   | 'debt_recovered'
+  | 'agency_spend'
   | 'upkeep_summary';
 
 export interface NewsItem {
@@ -42,7 +58,13 @@ export interface NewsItem {
   description: string;
   money_delta: number | null;
   reputation_delta: number | null;
+  fan_delta: number | null;
   client_id: string | null;
+}
+
+export interface NarratorPacingState {
+  consecutive_skipped_turns: number;
+  last_turn_skipped_items: number;
 }
 
 // Top-level game state. This is the single source of truth persisted between sessions.
@@ -68,7 +90,11 @@ export interface RunState {
   agent: AgentState;
 
   roster: Client[];               // signed clients
+  pinned_client_ids: string[];     // manually anchored clients in the lower bar
+  dismissed_auto_client_ids: string[]; // clients hidden from automatic lower-bar campaign status
   prospects: Prospect[];          // currently being scouted, not yet signed
+  // keys of one_time board item templates that have already appeared this run
+  fired_one_time_keys: string[];
 
   contracts: Contract[];          // all active contracts, both tiers
   campaigns: Campaign[];          // all active campaigns
@@ -79,9 +105,15 @@ export interface RunState {
 
   // items currently on the decision board; 2–5 per turn
   decision_board: DecisionItem[];
+  narrator_pacing: NarratorPacingState;
 
   news_feed: NewsItem[];
+  pending_release_summaries: ReleaseSummaryNotification[];
 
   is_active: boolean;
   end_condition: RunEndCondition | null;
+
+  tutorial_step: TutorialStep | null;
+  tutorial_friend_id: string | null;
+  tutorial_prospect_id: string | null;
 }

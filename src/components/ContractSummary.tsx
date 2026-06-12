@@ -45,6 +45,12 @@ export function ContractSummary({
         <Text style={styles.label}>Tier</Text>
         <Text style={styles.value}>{tier}</Text>
       </View>
+      {isEntityDeal && contract.entity_id && (
+        <View style={styles.row}>
+          <Text style={styles.label}>{entityLabel}</Text>
+          <Text style={styles.value}>{contract.entity_id}</Text>
+        </View>
+      )}
       <View style={styles.row}>
         <Text style={styles.label}>Payout</Text>
         <Text style={styles.value}>{payout}</Text>
@@ -92,9 +98,9 @@ export function ContractSummary({
         <View style={styles.row}>
           <Text style={styles.label}>Obligations</Text>
           <View style={styles.valueGroup}>
-            <Text style={styles.value}>{formatMoney(contract.obligations_per_turn)}/mo</Text>
+            <Text style={styles.value}>{formatMoney(contract.obligations_per_turn)}/wk</Text>
             {previousContract && previousContract.obligations_per_turn !== contract.obligations_per_turn && (
-              <Text style={styles.diffNote}>was {formatMoney(previousContract.obligations_per_turn)}/mo</Text>
+              <Text style={styles.diffNote}>was {formatMoney(previousContract.obligations_per_turn)}/wk</Text>
             )}
           </View>
         </View>

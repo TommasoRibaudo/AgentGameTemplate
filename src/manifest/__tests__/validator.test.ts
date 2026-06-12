@@ -23,11 +23,27 @@ describe('validateManifest — valid manifest', () => {
     expect(() => validateManifest(SPORTS_MANIFEST)).not.toThrow();
   });
 
+  it('music manifest includes cheap perform-gigs campaign content', () => {
+    const gigs = MUSIC_MANIFEST.campaign_types.find(c => c.key === 'perform_gigs');
+    const tour = MUSIC_MANIFEST.campaign_types.find(c => c.key === 'tour');
+    expect(gigs).toBeDefined();
+    expect(gigs?.release_kind).toBeUndefined();
+    expect(gigs?.base_payout).toBeLessThan(tour?.base_payout ?? Number.POSITIVE_INFINITY);
+    expect(gigs?.total_turns).toBeLessThanOrEqual(3);
+    expect(gigs?.valid_arc_stages).toContain('rising');
+    expect(gigs?.valid_arc_stages).toContain('declining');
+  });
+
   it('sports manifest has correct id and labels', () => {
     const result = validateManifest(SPORTS_MANIFEST);
     expect(result.id).toBe('sports_v1');
     expect(result.labels.client).toBe('Athlete');
     expect(result.labels.agent).toBe('Agent');
+  });
+
+  it('music manifest marks mixtape drop as a release campaign', () => {
+    const mixtape = MUSIC_MANIFEST.campaign_types.find(c => c.key === 'mixtape_drop');
+    expect(mixtape?.release_kind).toBe('mixtape');
   });
 });
 
@@ -85,6 +101,18 @@ describe('validateManifest — board_item_template cross-reference', () => {
     (m.board_item_templates as { contract_template_key: null }[])[0].contract_template_key = null;
     expect(() => validateManifest(m)).not.toThrow();
   });
+
+  it('accepts board item catalog release kind gates', () => {
+    const m = valid();
+    (m.board_item_templates as { requires_catalog_release_kind?: string[] }[])[0].requires_catalog_release_kind = ['album', 'single'];
+    expect(() => validateManifest(m)).not.toThrow();
+  });
+
+  it('throws when a board item catalog release kind gate is invalid', () => {
+    const m = valid();
+    (m.board_item_templates as { requires_catalog_release_kind?: string[] }[])[0].requires_catalog_release_kind = ['podcast'];
+    expect(() => validateManifest(m)).toThrow(/requires_catalog_release_kind entries must be "album", "single", or "mixtape"/);
+  });
 });
 
 // ─── Event defense_track_key validation ──────────────────────────────────────
@@ -108,6 +136,13 @@ describe('validateManifest — event defense_track_key', () => {
       (m.events as { defense_track_key: string }[])[0].defense_track_key = key;
       expect(() => validateManifest(m)).not.toThrow();
     }
+  });
+
+  it('throws when release_quality_delta is not numeric', () => {
+    const m = valid();
+    const event = (m.events as { options: { outcome: Record<string, unknown> }[] }[])[0];
+    event.options[0].outcome.release_quality_delta = 'high';
+    expect(() => validateManifest(m)).toThrow(/release_quality_delta must be a number/);
   });
 });
 
@@ -198,6 +233,18 @@ describe('validateManifest — arc config', () => {
 // ─── Campaign type validation ─────────────────────────────────────────────────
 
 describe('validateManifest — campaign types', () => {
+  it('accepts mixtape release kinds', () => {
+    const m = valid();
+    (m.campaign_types as { release_kind?: string }[])[0].release_kind = 'mixtape';
+    expect(() => validateManifest(m)).not.toThrow();
+  });
+
+  it('throws on unknown release kinds', () => {
+    const m = valid();
+    (m.campaign_types as { release_kind?: string }[])[0].release_kind = 'podcast';
+    expect(() => validateManifest(m)).toThrow(/release_kind must be "album", "single", or "mixtape"/);
+  });
+
   it('throws when total_turns is 0', () => {
     const m = valid();
     (m.campaign_types as { total_turns: number }[])[0].total_turns = 0;

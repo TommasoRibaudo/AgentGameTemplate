@@ -2,13 +2,14 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { FoggedStat } from '../types/client';
 import { Colors, FontSize, Spacing, Radius } from '../theme';
+import { getFogEstimateTextColor } from './fog-band-colors';
+import { formatFogStatDisplay } from './fog-band-display';
 
 export interface FogBandProps {
   label: string;
   stat: FoggedStat;
   trackMin?: number;
   trackMax?: number;
-  showInvested?: boolean;
   size?: 'compact' | 'full';
 }
 
@@ -17,29 +18,35 @@ export function FogBand({
   stat,
   trackMin = 0,
   trackMax = 100,
-  showInvested,
   size = 'full',
 }: FogBandProps) {
-  const range   = Math.max(trackMax - trackMin, 1);
-  const leftPct = Math.max((stat.observed_min - trackMin) / range, 0);
-  const bandPct = Math.max((stat.observed_max - stat.observed_min) / range, 0.02);
+  const range     = Math.max(trackMax - trackMin, 1);
+  const leftPct   = Math.max((stat.observed_min - trackMin) / range, 0);
+  const isPerfect = stat.observed_min === stat.observed_max;
+  const bandPct   = isPerfect ? 0 : Math.max((stat.observed_max - stat.observed_min) / range, 0.02);
   // clamp so flexes sum ≤ 1
-  const rightPct = Math.max(1 - leftPct - bandPct, 0);
+  const rightPct  = Math.max(1 - leftPct - bandPct, 0);
 
-  const span = stat.observed_max - stat.observed_min;
-  const mid  = Math.round((stat.observed_min + stat.observed_max) / 2);
-  const rangeLabel = span <= 2 ? `~${mid}` : `${Math.round(stat.observed_min)}–${Math.round(stat.observed_max)}`;
+  const statDisplay = formatFogStatDisplay(stat);
+  const estimateTextColor = getFogEstimateTextColor(stat, trackMin, trackMax);
+
+  const bandElement = isPerfect
+    ? <View style={[styles.band, styles.bandLine]} />
+    : <View style={[styles.band, { flex: bandPct }]} />;
 
   if (size === 'compact') {
     return (
-      <View style={styles.compactRow}>
+      <View
+        style={styles.compactRow}
+        accessibilityLabel={`${label} ${statDisplay.isEstimate ? 'estimate ' : ''}${statDisplay.accessibilityValue}`}
+      >
         <Text style={styles.compactLabel} numberOfLines={1}>{label}</Text>
         <View style={styles.track}>
           <View style={{ flex: leftPct }} />
-          <View style={[styles.band, { flex: bandPct }]} />
+          {bandElement}
           <View style={{ flex: rightPct }} />
         </View>
-        <Text style={styles.compactValue}>{rangeLabel}</Text>
+        <Text style={[styles.compactValue, { color: estimateTextColor }]} numberOfLines={1}>{statDisplay.label}</Text>
       </View>
     );
   }
@@ -48,16 +55,13 @@ export function FogBand({
     <View style={styles.fullWrap}>
       <View style={styles.fullHeader}>
         <Text style={styles.fullLabel}>{label}</Text>
-        <Text style={styles.fullValue}>{rangeLabel}</Text>
+        <Text style={[styles.fullValue, { color: estimateTextColor }]}>{statDisplay.label}</Text>
       </View>
       <View style={styles.trackFull}>
         <View style={{ flex: leftPct }} />
-        <View style={[styles.band, { flex: bandPct }]} />
+        {bandElement}
         <View style={{ flex: rightPct }} />
       </View>
-      {showInvested && stat.scouting_invested > 0 && (
-        <Text style={styles.invested}>{stat.scouting_invested} scouting invested</Text>
-      )}
     </View>
   );
 }
@@ -84,7 +88,8 @@ const styles = StyleSheet.create({
   compactValue: {
     color: Colors.textPrimary,
     fontSize: FontSize.xs,
-    width: 48,
+    fontWeight: '700',
+    width: 72,
     textAlign: 'right',
   },
   fullWrap: {
@@ -101,6 +106,7 @@ const styles = StyleSheet.create({
   fullValue: {
     color: Colors.textPrimary,
     fontSize: FontSize.sm,
+    fontWeight: '700',
   },
   trackFull: {
     flexDirection: 'row',
@@ -112,8 +118,7 @@ const styles = StyleSheet.create({
   band: {
     backgroundColor: Colors.accent,
   },
-  invested: {
-    color: Colors.textDim,
-    fontSize: FontSize.xs,
+  bandLine: {
+    width: 2,
   },
 });

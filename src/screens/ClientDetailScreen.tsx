@@ -1,23 +1,26 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  SafeAreaView, Alert,
+  SafeAreaView, Image,
 } from 'react-native';
+import { resolvePortrait } from '../portraits';
+import { useDialog } from '../context/DialogContext';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RosterStackParamList } from '../navigation/types';
-import { useRunState, useManifest, useMoney, useReputation, useTurnNumber, useRunStore } from '../store/useRunStore';
+import { useRunState, useManifest, useMoney, useReputation, useTurnNumber, useRunStore, useTutorialStep, useTutorialFriendId } from '../store/useRunStore';
 import { TopBar }          from '../components/TopBar';
 import { StatRow }         from '../components/StatRow';
 import { ContractSummary } from '../components/ContractSummary';
-import { canInvestScouting } from '../engine/client';
+import { DeltaText }       from '../components/DeltaText';
 import { CoreStatKey }     from '../types/primitives';
-import { AgentState }      from '../types/agent';
 import { Client }          from '../types/client';
-import { Campaign, CampaignSetup, CampaignSize } from '../types/campaign';
-import { CampaignTypeDefinition, VariantManifest } from '../types/manifest';
-import { buildCampaignSetup } from '../engine/campaign';
+import { Contract }        from '../types/contract';
+import { Campaign, CampaignHistoryItem, CampaignSetup, CampaignSize, CatalogRelease } from '../types/campaign';
+import { CampaignCategoryDefinition, CampaignTypeDefinition, VariantManifest } from '../types/manifest';
+import { buildCampaignSetup, clientMeetsCampaignContractRequirements, deriveCampaignSize, resolveCampaignCategory, SIZE_AUDIENCE_GATES } from '../engine/campaign';
+import { RENEWAL_NOTICE_TURNS } from '../engine/decision-queue';
 import { CLIENT_BOOST_AMOUNT, CLIENT_BOOST_COST } from '../engine/progression';
-import { Colors, FontSize, Spacing, Radius, ArcColors, formatMoney } from '../theme';
+import { Colors, FontSize, Spacing, Radius, ArcColors, formatMoney, formatAge } from '../theme';
 
 export type ClientDetailScreenProps = NativeStackScreenProps<RosterStackParamList, 'ClientDetail'>;
 
@@ -25,7 +28,7 @@ type Tab = 'overview' | 'stats' | 'contracts' | 'campaign';
 
 export function ClientDetailScreen({ route, navigation }: ClientDetailScreenProps) {
   const { clientId } = route.params;
-  const [activeTab, setActiveTab] = useState<Tab>('overview');
+  const [activeTab, setActiveTab] = useState<Tab>(route.params.initialTab ?? 'overview');
 
   const runState = useRunState();
   const manifest = useManifest();
@@ -33,24 +36,42 @@ export function ClientDetailScreen({ route, navigation }: ClientDetailScreenProp
   const rep      = useReputation();
   const turnNum  = useTurnNumber();
 
-  const investScouting = useRunStore(s => s.investScouting);
-  const boostClientStat = useRunStore(s => s.boostClientStat);
-  const releaseClient  = useRunStore(s => s.releaseClient);
-  const startCampaign  = useRunStore(s => s.startCampaign);
+  const boostClientStat   = useRunStore(s => s.boostClientStat);
+  const releaseClient     = useRunStore(s => s.releaseClient);
+  const startCampaign     = useRunStore(s => s.startCampaign);
+  const queueRenewalOffer = useRunStore(s => s.queueRenewalOffer);
+  const pinClient         = useRunStore(s => s.pinClient);
+  const unpinClient       = useRunStore(s => s.unpinClient);
+  const advanceTutorial   = useRunStore(s => s.advanceTutorial);
+  const { showDialog }    = useDialog();
 
-  if (!runState || !manifest) return null;
+  const tutorialStep     = useTutorialStep();
+  const tutorialFriendId = useTutorialFriendId();
 
-  const client = runState.roster.find(c => c.id === clientId);
-  if (!client) {
-    navigation.goBack();
-    return null;
-  }
+  const client = runState?.roster.find(c => c.id === clientId) ?? null;
+
+  // Navigate away if the client was removed from the roster (e.g. released).
+  useEffect(() => {
+    if (runState && !client) {
+      navigation.goBack();
+    }
+  }, [client, runState]);
+
+  // Advance tutorial when player first opens the tutorial friend's profile.
+  useEffect(() => {
+    if (tutorialStep === 'roster_highlight' && clientId === tutorialFriendId) {
+      advanceTutorial('roster_highlight');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!runState || !manifest || !client) return null;
 
   const labels      = manifest.labels;
   const statLabels  = labels.stat_labels;
   const arcColor    = ArcColors[client.arc_stage] ?? Colors.textSecondary;
   const agentContract = runState.contracts.find(
-    c => c.client_id === clientId && c.tier === 'agent_client',
+    c => c.client_id === clientId && c.tier === 'agent_client' && c.duration_remaining > 0,
   ) ?? null;
   const entityContracts = runState.contracts.filter(
     c => c.client_id === clientId && c.tier === 'client_entity',
@@ -58,12 +79,16 @@ export function ClientDetailScreen({ route, navigation }: ClientDetailScreenProp
   const activeCampaign = runState.campaigns.find(
     c => c.client_id === clientId && c.turns_remaining > 0,
   ) ?? null;
-
-  const canAffordInvestment = money >= 500;
-
-  function handleInvest(statKey: CoreStatKey, amount: number) {
-    investScouting(clientId, statKey, amount);
-  }
+  const isPinned = runState.pinned_client_ids.includes(clientId);
+  const hasPendingRenewal = runState.decision_board.some(item =>
+    item.type === 'renewal' && item.client_id === clientId && !item.is_resolved,
+  );
+  const canOfferRenewal = Boolean(
+    agentContract
+    && agentContract.duration_remaining > 0
+    && agentContract.duration_remaining <= RENEWAL_NOTICE_TURNS
+    && !hasPendingRenewal,
+  );
 
   function handleBoost(statKey: Exclude<CoreStatKey, 'talent'>) {
     boostClientStat(clientId, statKey);
@@ -74,22 +99,46 @@ export function ClientDetailScreen({ route, navigation }: ClientDetailScreenProp
     setup: Partial<Pick<CampaignSetup, 'size' | 'length' | 'budget'>>,
   ) {
     startCampaign(clientId, campaignTypeKey, [], setup);
+    if (tutorialStep === 'gig_hint' && clientId === tutorialFriendId) {
+      advanceTutorial('gig_hint');
+    }
   }
 
   function handleRelease() {
-    Alert.alert(
-      `Release ${client!.name}?`,
-      'This will end your contract and remove them from your roster.',
-      [
-        { text: 'Cancel', style: 'cancel' },
+    showDialog({
+      title: `Release ${client!.name}?`,
+      message: 'This will end your contract and remove them from your roster.',
+      buttons: [
+        { label: 'Cancel', style: 'cancel' },
         {
-          text: 'Release', style: 'destructive', onPress: () => {
+          label: 'Release', style: 'destructive', onPress: () => {
             releaseClient(clientId);
             navigation.goBack();
           },
         },
       ],
-    );
+    });
+  }
+
+  function handleTogglePin() {
+    if (isPinned) {
+      unpinClient(clientId);
+      return;
+    }
+
+    pinClient(clientId);
+  }
+
+  function handleOfferRenewal() {
+    const clientName = useRunStore.getState().state?.roster.find(c => c.id === clientId)?.name ?? labels.client;
+    const queued = queueRenewalOffer(clientId);
+    showDialog({
+      title: queued ? 'Renewal Offered' : 'Renewal Unavailable',
+      message: queued
+        ? `A renewal offer for ${clientName} is on the decision board.`
+        : 'A renewal offer could not be created for this contract.',
+      buttons: [{ label: 'OK' }],
+    });
   }
 
   const TABS: { key: Tab; label: string }[] = [
@@ -116,30 +165,63 @@ export function ClientDetailScreen({ route, navigation }: ClientDetailScreenProp
 
       {/* Client header */}
       <View style={styles.clientHeader}>
-        <View>
+        <Image source={resolvePortrait(client.portrait, client.id)} style={styles.clientPortrait} />
+        <View style={styles.clientHeaderText}>
           <Text style={styles.clientName}>{client.name}</Text>
           <Text style={[styles.arcStage, { color: arcColor }]}>
-            {client.arc_stage.toUpperCase()} · Turn {client.turns_on_roster} on roster
+            {client.arc_stage.toUpperCase()} · Week {client.turns_on_roster} on roster
           </Text>
         </View>
-        <TouchableOpacity style={styles.releaseBtn} onPress={handleRelease}>
-          <Text style={styles.releaseBtnText}>Release</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity style={[styles.pinBtn, isPinned && styles.pinBtnActive]} onPress={handleTogglePin}>
+            <Text style={[styles.pinBtnText, isPinned && styles.pinBtnTextActive]}>
+              {isPinned ? 'Unpin' : 'Pin'}
+            </Text>
+          </TouchableOpacity>
+          {canOfferRenewal && (
+            <TouchableOpacity style={styles.headerRenewBtn} onPress={handleOfferRenewal}>
+              <Text style={styles.headerRenewBtnText}>Renew</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.releaseBtn} onPress={handleRelease}>
+            <Text style={styles.releaseBtnText}>Release</Text>
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {/* Tutorial hint: tap the Campaign tab */}
+      {tutorialStep === 'campaign_tab' && clientId === tutorialFriendId && (
+        <View style={styles.tutorialBanner}>
+          <Text style={styles.tutorialBannerText}>
+            Tap the Campaign tab to book Dev Reyes' first gig.
+          </Text>
+        </View>
+      )}
 
       {/* Tabs */}
       <View style={styles.tabs}>
-        {TABS.map(t => (
-          <TouchableOpacity
-            key={t.key}
-            style={[styles.tab, activeTab === t.key && styles.tabActive]}
-            onPress={() => setActiveTab(t.key)}
-          >
-            <Text style={[styles.tabText, activeTab === t.key && styles.tabTextActive]}>
-              {t.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        {TABS.map(t => {
+          const isTutorialTarget = t.key === 'campaign'
+            && tutorialStep === 'campaign_tab'
+            && clientId === tutorialFriendId;
+          const isDimmed = tutorialStep === 'campaign_tab'
+            && clientId === tutorialFriendId
+            && !isTutorialTarget;
+          return (
+            <TouchableOpacity
+              key={t.key}
+              style={[styles.tab, activeTab === t.key && styles.tabActive, isTutorialTarget && styles.tabTutorial, isDimmed && styles.tabDimmed]}
+              onPress={() => {
+                if (isTutorialTarget) advanceTutorial('campaign_tab');
+                setActiveTab(t.key);
+              }}
+            >
+              <Text style={[styles.tabText, activeTab === t.key && styles.tabTextActive, isTutorialTarget && styles.tabTextTutorial]}>
+                {t.label}{isTutorialTarget ? ' ✦' : ''}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
@@ -150,16 +232,15 @@ export function ClientDetailScreen({ route, navigation }: ClientDetailScreenProp
             activeCampaign={activeCampaign}
             manifest={manifest}
             labels={labels}
+            canOfferRenewal={canOfferRenewal}
+            onOfferRenewal={handleOfferRenewal}
           />
         )}
         {activeTab === 'stats' && (
           <StatsTab
             client={client}
-            agent={runState.agent}
             statLabels={statLabels}
-            onInvest={handleInvest}
             onBoost={handleBoost}
-            canAffordInvestment={canAffordInvestment}
             canAffordBoost={money >= CLIENT_BOOST_COST}
           />
         )}
@@ -168,17 +249,30 @@ export function ClientDetailScreen({ route, navigation }: ClientDetailScreenProp
             agentContract={agentContract}
             entityContracts={entityContracts}
             labels={labels}
+            canOfferRenewal={canOfferRenewal}
+            onOfferRenewal={handleOfferRenewal}
           />
         )}
-        {activeTab === 'campaign' && (
+        {activeTab === 'campaign' && tutorialStep === 'gig_hint' && clientId === tutorialFriendId && (
+          <View style={styles.tutorialBanner}>
+            <Text style={styles.tutorialBannerText}>
+              Book a local gig to earn your first income and build some buzz.
+            </Text>
+          </View>
+        )}
+        {/* Keep CampaignTab mounted so setup controls (length/budget) survive tab switches */}
+        <View style={activeTab !== 'campaign' ? { display: 'none' } : undefined}>
           <CampaignTab
             client={client}
             activeCampaign={activeCampaign}
+            runState={runState}
             manifest={manifest}
             money={money}
             onStartCampaign={handleStartCampaign}
+            isGigHint={tutorialStep === 'gig_hint' && clientId === tutorialFriendId}
+            hideCategoryRecord={tutorialStep !== null && tutorialStep !== 'done'}
           />
-        )}
+        </View>
         <View style={{ height: Spacing.xxl }} />
       </ScrollView>
     </SafeAreaView>
@@ -187,18 +281,67 @@ export function ClientDetailScreen({ route, navigation }: ClientDetailScreenProp
 
 // ─── Tab content components ───────────────────────────────────────────────────
 
-function OverviewTab({ client, agentContract, activeCampaign, manifest, labels }: any) {
+function OverviewTab({
+  client,
+  agentContract,
+  activeCampaign,
+  manifest,
+  labels,
+  canOfferRenewal,
+  onOfferRenewal,
+}: {
+  client: Client;
+  agentContract: Contract | null;
+  activeCampaign: Campaign | null;
+  manifest: VariantManifest;
+  labels: VariantManifest['labels'];
+  canOfferRenewal: boolean;
+  onOfferRenewal: () => void;
+}) {
   return (
     <View style={styles.tabContent}>
       {activeCampaign && (
         <Section title="Active Campaign">
           <InfoRow label="Type"  value={activeCampaign.type_key.replace(/_/g, ' ')} />
-          <InfoRow label="Turns left" value={String(activeCampaign.turns_remaining)} />
+          <InfoRow label="Weeks left" value={String(activeCampaign.turns_remaining)} />
         </Section>
       )}
       <Section title="Audience">
+        <InfoRow label="Age" value={formatAge(client.age_weeks)} />
         <InfoRow label={labels.audience} value={client.audience.toLocaleString()} />
       </Section>
+      <ArtistOverviewShelf
+        title="Discography"
+        emptyText="No releases yet."
+        items={(client.catalog_releases ?? []).slice().reverse()}
+        renderItem={release => (
+          <ReleaseOverviewRow key={release.id} release={release} />
+        )}
+      />
+      <ArtistOverviewShelf
+        title="Concerts"
+        emptyText="No concerts booked yet."
+        items={(client.campaign_history ?? []).filter(isConcertHistory).slice().reverse()}
+        renderItem={item => (
+          <LiveOverviewRow
+            key={item.id}
+            item={item}
+            fallbackLabel={manifest.campaign_types.find(c => c.key === item.type_key)?.label}
+          />
+        )}
+      />
+      <ArtistOverviewShelf
+        title="Gigs"
+        emptyText="No gigs played yet."
+        items={(client.campaign_history ?? []).filter(isGigHistory).slice().reverse()}
+        renderItem={item => (
+          <LiveOverviewRow
+            key={item.id}
+            item={item}
+            fallbackLabel={manifest.campaign_types.find(c => c.key === item.type_key)?.label}
+          />
+        )}
+      />
       {agentContract && (
         <Section title={`Your ${labels.client} Contract`}>
           <ContractSummary
@@ -209,6 +352,11 @@ function OverviewTab({ client, agentContract, activeCampaign, manifest, labels }
             showPosture
             showExpiry
           />
+          {canOfferRenewal && (
+            <TouchableOpacity style={styles.renewBtn} onPress={onOfferRenewal}>
+              <Text style={styles.renewBtnText}>Offer Renewal</Text>
+            </TouchableOpacity>
+          )}
         </Section>
       )}
       {client.traits.length > 0 && (
@@ -226,13 +374,104 @@ function OverviewTab({ client, agentContract, activeCampaign, manifest, labels }
   );
 }
 
-function StatsTab({ client, agent, statLabels, onInvest, onBoost, canAffordInvestment, canAffordBoost }: {
+function ArtistOverviewShelf<T>({
+  title,
+  emptyText,
+  items,
+  renderItem,
+}: {
+  title: string;
+  emptyText: string;
+  items: T[];
+  renderItem: (item: T) => React.ReactNode;
+}) {
+  return (
+    <Section title={title}>
+      <View style={styles.spotifyShelf}>
+        {items.length === 0 ? (
+          <View style={styles.emptyMediaRow}>
+            <View style={styles.albumArtPlaceholder}>
+              <View style={styles.albumArtCenter} />
+            </View>
+            <View style={styles.mediaText}>
+              <Text style={styles.mediaTitle}>{emptyText}</Text>
+              <Text style={styles.mediaMeta}>Reserved for future artwork</Text>
+            </View>
+          </View>
+        ) : (
+          items.map(renderItem)
+        )}
+      </View>
+    </Section>
+  );
+}
+
+function ReleaseOverviewRow({ release }: { release: CatalogRelease }) {
+  const kind = release.kind === 'album' ? 'Album' : release.kind === 'mixtape' ? 'Mixtape' : 'Single';
+  const performance = (release.kind === 'album' || release.kind === 'mixtape')
+    ? `${release.album_units_sold.toLocaleString()} sold - ${release.total_streams.toLocaleString()} streams`
+    : `${release.total_streams.toLocaleString()} streams`;
+
+  return (
+    <View style={styles.mediaRow}>
+      <View style={styles.albumArtPlaceholder}>
+        <Text style={styles.albumArtInitial}>{release.title.trim().charAt(0).toUpperCase() || '?'}</Text>
+      </View>
+      <View style={styles.mediaText}>
+        <Text style={styles.mediaTitle} numberOfLines={1}>{release.title}</Text>
+        <Text style={styles.mediaMeta} numberOfLines={1}>
+          {kind} - Released W{release.released_turn}
+        </Text>
+        <Text style={styles.mediaSubMeta} numberOfLines={1}>
+          {performance}
+        </Text>
+        <Text style={styles.mediaSubMeta} numberOfLines={1}>
+          +{release.total_fan_gain.toLocaleString()} fans
+        </Text>
+      </View>
+      <Text style={styles.mediaValue}>{formatMoney(release.latest_turn_income)}</Text>
+    </View>
+  );
+}
+
+function LiveOverviewRow({
+  item,
+  fallbackLabel,
+}: {
+  item: CampaignHistoryItem;
+  fallbackLabel?: string;
+}) {
+  return (
+    <View style={styles.mediaRow}>
+      <View style={styles.liveArtPlaceholder}>
+        <Text style={styles.liveArtText}>{item.type_key === 'tour' ? 'TOUR' : 'GIG'}</Text>
+      </View>
+      <View style={styles.mediaText}>
+        <Text style={styles.mediaTitle} numberOfLines={1}>{item.label || fallbackLabel || item.type_key.replace(/_/g, ' ')}</Text>
+        <Text style={styles.mediaMeta} numberOfLines={1}>
+          Completed W{item.completed_turn} - {item.total_turns} weeks
+        </Text>
+        <Text style={styles.mediaSubMeta} numberOfLines={1}>
+          {item.summary.fan_delta >= 0 ? '+' : ''}{item.summary.fan_delta.toLocaleString()} fans
+        </Text>
+      </View>
+      <DeltaText value={item.summary.money_delta} kind="money" style={styles.mediaValue} />
+    </View>
+  );
+}
+
+function isConcertHistory(item: CampaignHistoryItem): boolean {
+  return item.type_key === 'tour';
+}
+
+function isGigHistory(item: CampaignHistoryItem): boolean {
+  return item.type_key === 'perform_gigs';
+}
+
+function StatsTab({ client, statLabels, onBoost, canAffordBoost }: {
   client: Client;
-  agent: AgentState;
   statLabels: Record<CoreStatKey, string>;
-  onInvest: (statKey: CoreStatKey, amount: number) => void;
   onBoost: (statKey: Exclude<CoreStatKey, 'talent'>) => void;
-  canAffordInvestment: boolean;
   canAffordBoost: boolean;
 }) {
   const keys: CoreStatKey[] = ['talent', 'form', 'marketability', 'morale'];
@@ -244,9 +483,6 @@ function StatsTab({ client, agent, statLabels, onInvest, onBoost, canAffordInves
             statKey={key}
             label={statLabels[key]}
             stat={client.stats[key]}
-            onInvest={onInvest}
-            canInvest={canAffordInvestment}
-            scoutMaxed={!canInvestScouting(client, key, 500, agent)}
           />
           {key !== 'talent' && (
             <TouchableOpacity
@@ -267,7 +503,7 @@ function StatsTab({ client, agent, statLabels, onInvest, onBoost, canAffordInves
   );
 }
 
-function ContractsTab({ agentContract, entityContracts, labels }: any) {
+function ContractsTab({ agentContract, entityContracts, labels, canOfferRenewal, onOfferRenewal }: any) {
   const agentCutPercent = agentContract?.your_cut ?? null;
 
   return (
@@ -282,6 +518,11 @@ function ContractsTab({ agentContract, entityContracts, labels }: any) {
             showPosture
             showExpiry
           />
+          {canOfferRenewal && (
+            <TouchableOpacity style={styles.renewBtn} onPress={onOfferRenewal}>
+              <Text style={styles.renewBtnText}>Offer Renewal</Text>
+            </TouchableOpacity>
+          )}
         </Section>
       ) : (
         <Text style={styles.noContract}>No agent contract in force.</Text>
@@ -309,38 +550,71 @@ function ContractsTab({ agentContract, entityContracts, labels }: any) {
 function CampaignTab({
   client,
   activeCampaign,
+  runState,
   manifest,
   money,
   onStartCampaign,
+  isGigHint = false,
+  hideCategoryRecord = false,
 }: {
   client: Client;
   activeCampaign: Campaign | null;
+  runState: NonNullable<ReturnType<typeof useRunState>>;
   manifest: VariantManifest;
   money: number;
   onStartCampaign: (
     campaignTypeKey: string,
     setup: Partial<Pick<CampaignSetup, 'size' | 'length' | 'budget'>>,
   ) => void;
+  isGigHint?: boolean;
+  hideCategoryRecord?: boolean;
 }) {
-  const availableCampaigns = manifest.campaign_types.filter(typeDef =>
-    typeDef.valid_arc_stages.includes(client.arc_stage),
-  );
+  const rawCategories = manifest.campaign_categories;
+  const categories = hideCategoryRecord
+    ? rawCategories?.filter(c => c.category !== 'record')
+    : rawCategories;
 
   if (!activeCampaign) {
     return (
       <View style={styles.tabContent}>
         <Section title="Start Campaign">
-          {availableCampaigns.length === 0 ? (
-            <Text style={styles.noContract}>No campaigns available for this career stage.</Text>
-          ) : (
-            availableCampaigns.map(typeDef => (
-              <CampaignStartRow
-                key={typeDef.key}
-                campaignType={typeDef}
+          {categories && categories.length > 0 ? (
+            categories.map(categoryDef => (
+              <CategoryCampaignCard
+                key={categoryDef.category}
+                categoryDef={categoryDef}
+                client={client}
+                runState={runState}
+                manifest={manifest}
                 money={money}
-                onStart={setup => onStartCampaign(typeDef.key, setup)}
+                onStartCampaign={onStartCampaign}
+                highlighted={isGigHint && categoryDef.category === 'perform'}
+                dimmed={isGigHint && categoryDef.category !== 'perform'}
               />
             ))
+          ) : (
+            (() => {
+              const availableCampaigns = manifest.campaign_types.filter(typeDef =>
+                !typeDef.event_only
+                && typeDef.valid_arc_stages.includes(client.arc_stage)
+                && clientMeetsCampaignContractRequirements(runState, client.id, typeDef),
+              );
+              return availableCampaigns.length === 0 ? (
+                <Text style={styles.noContract}>No campaigns available for this career stage.</Text>
+              ) : (
+                availableCampaigns.map(typeDef => (
+                  <CampaignStartRow
+                    key={typeDef.key}
+                    campaignType={typeDef}
+                    money={money}
+                    onStart={setup => onStartCampaign(typeDef.key, setup)}
+                    highlighted={isGigHint && typeDef.key === 'perform_gigs'}
+                    dimmed={isGigHint && typeDef.key !== 'perform_gigs'}
+                    budgetFloors={manifest.budget_floors}
+                  />
+                ))
+              );
+            })()
           )}
         </Section>
         <CatalogSection client={client} />
@@ -354,7 +628,7 @@ function CampaignTab({
         <InfoRow label="Type" value={activeCampaign.type_key.replace(/_/g, ' ')} />
         {activeCampaign.setup && (
           <>
-            <InfoRow label="Size" value={activeCampaign.setup.size} />
+            <InfoRow label="Size" value={manifest.campaign_types.find(ct => ct.key === activeCampaign.type_key)?.size_labels?.[activeCampaign.setup.size] ?? activeCampaign.setup.size} />
             <InfoRow label="Budget" value={formatMoney(activeCampaign.setup.budget)} />
           </>
         )}
@@ -364,7 +638,7 @@ function CampaignTab({
             <InfoRow label="Songs" value={String(activeCampaign.release_plan.songs.length)} />
           </>
         )}
-        <InfoRow label="Turns left" value={String(activeCampaign.turns_remaining)} />
+        <InfoRow label="Weeks left" value={String(activeCampaign.turns_remaining)} />
       </Section>
       <Section title="Installment History">
         {activeCampaign.installment_results.length === 0 ? (
@@ -372,11 +646,12 @@ function CampaignTab({
         ) : (
           activeCampaign.installment_results.map((r: any, i: number) => (
             <View key={i} style={styles.installmentRow}>
-              <Text style={styles.installmentTurn}>T{r.turn_number}</Text>
+              <Text style={styles.installmentTurn}>W{r.turn_number}</Text>
               <Text style={styles.installmentKey}>{r.outcome_key.replace(/_/g, ' ')}</Text>
-              <Text style={[styles.installmentDelta, r.money_delta < 0 ? styles.neg : styles.pos]}>
-                {formatMoney(r.money_delta)}
-              </Text>
+              {r.audience_gain > 0 && (
+                <Text style={styles.installmentDelta}>+{r.audience_gain.toLocaleString()} fans</Text>
+              )}
+              <DeltaText value={r.money_delta} kind="money" style={styles.installmentDelta} />
             </View>
           ))
         )}
@@ -387,74 +662,215 @@ function CampaignTab({
   );
 }
 
+function CategoryCampaignCard({
+  categoryDef,
+  client,
+  runState,
+  manifest,
+  money,
+  onStartCampaign,
+  highlighted = false,
+  dimmed = false,
+}: {
+  categoryDef: CampaignCategoryDefinition;
+  client: Client;
+  runState: NonNullable<ReturnType<typeof useRunState>>;
+  manifest: VariantManifest;
+  money: number;
+  onStartCampaign: (
+    campaignTypeKey: string,
+    setup: Partial<Pick<CampaignSetup, 'size' | 'length' | 'budget'>>,
+  ) => void;
+  highlighted?: boolean;
+  dimmed?: boolean;
+}) {
+  const lastRule = categoryDef.routing_rules[categoryDef.routing_rules.length - 1];
+  const fallbackTypeDef = lastRule
+    ? manifest.campaign_types.find(ct => ct.key === lastRule.type_key) ?? null
+    : null;
+  const initialLength = fallbackTypeDef?.total_turns ?? 2;
+
+  const [length, setLength] = useState(initialLength);
+  const [budget, setBudget] = useState(() => {
+    const r = resolveCampaignCategory(categoryDef, client, runState.contracts, initialLength);
+    const td = r ? manifest.campaign_types.find(ct => ct.key === r.type_key) ?? null : null;
+    return td ? buildCampaignSetup(td, 'medium', initialLength, undefined, manifest.budget_floors).budget : 0;
+  });
+  const budgetWasAdjustedRef = useRef(false);
+
+  const resolved = resolveCampaignCategory(categoryDef, client, runState.contracts, length);
+  const typeDef = resolved
+    ? manifest.campaign_types.find(ct => ct.key === resolved.type_key) ?? null
+    : null;
+  const derivedSize = typeDef
+    ? deriveCampaignSize(typeDef, length, budget, manifest.budget_floors)
+    : 'medium';
+  const setup = typeDef
+    ? buildCampaignSetup(typeDef, derivedSize, length, budget, manifest.budget_floors)
+    : null;
+  const canAfford = setup ? money >= setup.budget : false;
+  const audienceGate = SIZE_AUDIENCE_GATES[derivedSize];
+  const audienceWarning = audienceGate > 0 && client.audience < audienceGate;
+
+  function updateLength(delta: number) {
+    const nextLength = Math.max(1, Math.min(12, length + delta));
+    setLength(nextLength);
+    // Reset budget to medium baseline when type crosses a turn threshold
+    const r = resolveCampaignCategory(categoryDef, client, runState.contracts, nextLength);
+    const td = r ? manifest.campaign_types.find(ct => ct.key === r.type_key) ?? null : null;
+    if (td && !budgetWasAdjustedRef.current) setBudget(buildCampaignSetup(td, 'medium', nextLength, undefined, manifest.budget_floors).budget);
+  }
+
+  function updateBudget(delta: number) {
+    budgetWasAdjustedRef.current = true;
+    setBudget(currentBudget => Math.max(0, currentBudget + delta));
+  }
+
+  function handleStart() {
+    if (!resolved || !setup) return;
+    onStartCampaign(resolved.type_key, { size: derivedSize, length: setup.length, budget: setup.budget });
+  }
+
+  const isUnavailable = !resolved || !typeDef || !setup;
+
+  return (
+    <View style={[styles.campaignStartRow, highlighted && styles.campaignStartRowHighlighted, dimmed && styles.campaignStartRowDimmed]}>
+      <Text style={styles.campaignCategoryLabel}>{categoryDef.display_label}</Text>
+      {isUnavailable ? (
+        <Text style={styles.noContract}>Not available for this artist right now.</Text>
+      ) : (
+        <>
+          <Text style={styles.campaignName}>{resolved.size_names[derivedSize]}</Text>
+          <Text style={styles.campaignMeta}>{campaignTone(typeDef)}</Text>
+
+          <View style={styles.setupControls}>
+            <View style={styles.setupControl}>
+              <Text style={styles.setupControlLabel}>Length</Text>
+              <View style={styles.stepper}>
+                <TouchableOpacity style={styles.stepBtn} onPress={() => updateLength(-1)}>
+                  <Text style={styles.stepBtnText}>−</Text>
+                </TouchableOpacity>
+                <Text style={styles.stepValue}>{setup.length} weeks</Text>
+                <TouchableOpacity style={styles.stepBtn} onPress={() => updateLength(1)}>
+                  <Text style={styles.stepBtnText}>+</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+            <View style={styles.setupControl}>
+              <Text style={styles.setupControlLabel}>Budget</Text>
+              <View style={styles.stepper}>
+                <TouchableOpacity style={styles.stepBtn} onPress={() => updateBudget(-500)}>
+                  <Text style={styles.stepBtnText}>−</Text>
+                </TouchableOpacity>
+                <Text style={styles.stepValue}>{formatMoney(setup.budget)}</Text>
+                <TouchableOpacity style={styles.stepBtn} onPress={() => updateBudget(500)}>
+                  <Text style={styles.stepBtnText}>+</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+
+          <Text style={styles.campaignMeta}>{setupTone(setup)}</Text>
+          {audienceWarning && (
+            <Text style={styles.campaignWarning}>Low audience — expect weaker results at this scale.</Text>
+          )}
+          {!canAfford && (
+            <Text style={styles.campaignWarning}>Need {formatMoney(setup.budget - money)} more.</Text>
+          )}
+
+          <TouchableOpacity
+            style={[styles.campaignStartBtn, !canAfford && styles.campaignStartBtnDisabled]}
+            onPress={handleStart}
+            disabled={!canAfford}
+            accessibilityRole="button"
+            accessibilityLabel={`Start ${resolved.size_names[derivedSize]}`}
+          >
+            <Text style={styles.campaignStartBtnText}>Start</Text>
+          </TouchableOpacity>
+        </>
+      )}
+    </View>
+  );
+}
+
 function CampaignStartRow({
   campaignType,
   money,
   onStart,
+  highlighted = false,
+  dimmed = false,
+  budgetFloors,
 }: {
   campaignType: CampaignTypeDefinition;
   money: number;
   onStart: (setup: Partial<Pick<CampaignSetup, 'size' | 'length' | 'budget'>>) => void;
+  highlighted?: boolean;
+  dimmed?: boolean;
+  budgetFloors?: VariantManifest['budget_floors'];
 }) {
   const [size, setSize] = useState<CampaignSize>('medium');
   const [length, setLength] = useState(campaignType.total_turns);
-  const [budget, setBudget] = useState(buildCampaignSetup(campaignType).budget);
+  const [budget, setBudget] = useState(buildCampaignSetup(campaignType, 'medium', campaignType.total_turns, undefined, budgetFloors).budget);
+  const budgetWasAdjustedRef = useRef(false);
 
-  const setup = buildCampaignSetup(campaignType, size, length, budget);
+  const setup = buildCampaignSetup(campaignType, size, length, budget, budgetFloors);
   const canAfford = money >= setup.budget;
 
   function updateSize(nextSize: CampaignSize) {
     setSize(nextSize);
-    setBudget(buildCampaignSetup(campaignType, nextSize, length).budget);
+    if (!budgetWasAdjustedRef.current) setBudget(buildCampaignSetup(campaignType, nextSize, length, undefined, budgetFloors).budget);
   }
 
   function updateLength(delta: number) {
     const nextLength = Math.max(1, Math.min(12, length + delta));
     setLength(nextLength);
-    setBudget(buildCampaignSetup(campaignType, size, nextLength).budget);
+    if (!budgetWasAdjustedRef.current) setBudget(buildCampaignSetup(campaignType, size, nextLength, undefined, budgetFloors).budget);
   }
 
   function updateBudget(delta: number) {
-    setBudget(Math.max(0, budget + delta));
+    budgetWasAdjustedRef.current = true;
+    setBudget(currentBudget => Math.max(0, currentBudget + delta));
   }
 
   return (
-    <View style={styles.campaignStartRow}>
-      <View style={styles.campaignStartText}>
-        <Text style={styles.campaignName}>{campaignType.label}</Text>
-        <Text style={styles.campaignMeta}>{campaignTone(campaignType)}</Text>
-        <View style={styles.segmentRow}>
-          {(['small', 'medium', 'large'] as CampaignSize[]).map(option => (
-            <TouchableOpacity
-              key={option}
-              style={[styles.segmentBtn, size === option && styles.segmentBtnActive]}
-              onPress={() => updateSize(option)}
-              accessibilityRole="button"
-              accessibilityLabel={`Set campaign size to ${option}`}
-            >
-              <Text style={[styles.segmentBtnText, size === option && styles.segmentBtnTextActive]}>
-                {option}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-        <View style={styles.setupRow}>
-          <Text style={styles.setupLabel}>Length</Text>
+    <View style={[styles.campaignStartRow, highlighted && styles.campaignStartRowHighlighted, dimmed && styles.campaignStartRowDimmed]}>
+      <Text style={styles.campaignName}>{campaignType.label}</Text>
+      <Text style={styles.campaignMeta}>{campaignTone(campaignType)}</Text>
+
+      <View style={styles.segmentRow}>
+        {(['small', 'medium', 'large'] as CampaignSize[]).map(option => (
+          <TouchableOpacity
+            key={option}
+            style={[styles.segmentBtn, size === option && styles.segmentBtnActive]}
+            onPress={() => updateSize(option)}
+            accessibilityRole="button"
+            accessibilityLabel={`Set campaign size to ${option}`}
+          >
+            <Text style={[styles.segmentBtnText, size === option && styles.segmentBtnTextActive]}>
+              {campaignType.size_labels?.[option] ?? option}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <View style={styles.setupControls}>
+        <View style={styles.setupControl}>
+          <Text style={styles.setupControlLabel}>Length</Text>
           <View style={styles.stepper}>
             <TouchableOpacity style={styles.stepBtn} onPress={() => updateLength(-1)}>
-              <Text style={styles.stepBtnText}>-</Text>
+              <Text style={styles.stepBtnText}>−</Text>
             </TouchableOpacity>
-            <Text style={styles.stepValue}>{setup.length} turns</Text>
+            <Text style={styles.stepValue}>{setup.length} weeks</Text>
             <TouchableOpacity style={styles.stepBtn} onPress={() => updateLength(1)}>
               <Text style={styles.stepBtnText}>+</Text>
             </TouchableOpacity>
           </View>
         </View>
-        <View style={styles.setupRow}>
-          <Text style={styles.setupLabel}>Budget</Text>
+        <View style={styles.setupControl}>
+          <Text style={styles.setupControlLabel}>Budget</Text>
           <View style={styles.stepper}>
             <TouchableOpacity style={styles.stepBtn} onPress={() => updateBudget(-500)}>
-              <Text style={styles.stepBtnText}>-</Text>
+              <Text style={styles.stepBtnText}>−</Text>
             </TouchableOpacity>
             <Text style={styles.stepValue}>{formatMoney(setup.budget)}</Text>
             <TouchableOpacity style={styles.stepBtn} onPress={() => updateBudget(500)}>
@@ -462,11 +878,13 @@ function CampaignStartRow({
             </TouchableOpacity>
           </View>
         </View>
-        <Text style={styles.campaignMeta}>{setupTone(setup)}</Text>
-        {!canAfford && (
-          <Text style={styles.campaignWarning}>Need {formatMoney(setup.budget - money)} more.</Text>
-        )}
       </View>
+
+      <Text style={styles.campaignMeta}>{setupTone(setup)}</Text>
+      {!canAfford && (
+        <Text style={styles.campaignWarning}>Need {formatMoney(setup.budget - money)} more.</Text>
+      )}
+
       <TouchableOpacity
         style={[styles.campaignStartBtn, !canAfford && styles.campaignStartBtnDisabled]}
         onPress={() => onStart({ size, length: setup.length, budget: setup.budget })}
@@ -483,6 +901,7 @@ function CampaignStartRow({
 function campaignTone(campaignType: CampaignTypeDefinition): string {
   if (campaignType.release_kind === 'album') return 'Album release with post-launch sales and streams.';
   if (campaignType.release_kind === 'single') return 'Single release with post-launch stream income.';
+  if (campaignType.release_kind === 'mixtape') return 'Mixtape release with post-launch stream income.';
   return 'Live campaign with immediate installments.';
 }
 
@@ -501,12 +920,12 @@ function CatalogSection({ client }: { client: Client }) {
         <View key={release.id} style={styles.releaseRow}>
           <Text style={styles.releaseTitle}>{release.title}</Text>
           <Text style={styles.releaseMeta}>
-            {release.kind === 'album'
-              ? `${release.album_units_sold.toLocaleString()} albums - ${release.total_streams.toLocaleString()} streams`
+            {(release.kind === 'album' || release.kind === 'mixtape')
+              ? `${release.album_units_sold.toLocaleString()} sold - ${release.total_streams.toLocaleString()} streams`
               : `${release.total_streams.toLocaleString()} streams`}
           </Text>
           <Text style={styles.releaseMeta}>
-            Last turn {formatMoney(release.latest_turn_income)} - Total {formatMoney(release.album_income_total + release.stream_income_total)}
+            Last week {formatMoney(release.latest_turn_income)} - Total {formatMoney(release.album_income_total + release.stream_income_total)}
           </Text>
         </View>
       ))}
@@ -523,9 +942,10 @@ function CampaignHistorySection({ client }: { client: Client }) {
         <View key={item.id} style={styles.historyRow}>
           <Text style={styles.releaseTitle}>{item.label}</Text>
           <Text style={styles.releaseMeta}>
-            Completed T{item.completed_turn} - {formatMoney(item.summary.money_delta)}
+            Completed W{item.completed_turn} - <DeltaText value={item.summary.money_delta} kind="money" />
+            {item.summary.fan_delta !== 0 ? ` - ${item.summary.fan_delta > 0 ? '+' : ''}${item.summary.fan_delta.toLocaleString()} fans` : ''}
             {item.summary.streams !== undefined ? ` - ${item.summary.streams.toLocaleString()} streams` : ''}
-            {item.summary.album_units_sold !== undefined ? ` - ${item.summary.album_units_sold.toLocaleString()} albums` : ''}
+            {item.summary.album_units_sold ? ` - ${item.summary.album_units_sold.toLocaleString()} sold` : ''}
           </Text>
           {item.visible_notes.map(note => (
             <Text key={note} style={styles.releaseNote}>{note}</Text>
@@ -564,6 +984,14 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
+  clientPortrait: {
+    width: 72,
+    height: 72,
+  },
+  clientHeaderText: {
+    flex: 1,
+    minWidth: 0,
+  },
   clientName: {
     color: Colors.textPrimary,
     fontSize: FontSize.xl,
@@ -573,8 +1001,41 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     marginTop: 2,
   },
+  headerActions: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  pinBtn: {
+    borderWidth: 1,
+    borderColor: Colors.accent,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+  },
+  pinBtnActive: {
+    backgroundColor: Colors.accent,
+  },
+  pinBtnText: {
+    color: Colors.accent,
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+  },
+  pinBtnTextActive: {
+    color: Colors.textPrimary,
+  },
+  headerRenewBtn: {
+    borderWidth: 1,
+    borderColor: Colors.positive,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+  },
+  headerRenewBtnText: {
+    color: Colors.positive,
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+  },
   releaseBtn: {
-    marginLeft: 'auto',
     borderWidth: 1,
     borderColor: Colors.negative,
     borderRadius: Radius.md,
@@ -585,6 +1046,18 @@ const styles = StyleSheet.create({
     color: Colors.negative,
     fontSize: FontSize.sm,
     fontWeight: '600',
+  },
+  renewBtn: {
+    alignSelf: 'flex-start',
+    backgroundColor: Colors.accent,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+  },
+  renewBtnText: {
+    color: Colors.textPrimary,
+    fontSize: FontSize.sm,
+    fontWeight: '700',
   },
   tabs: {
     flexDirection: 'row',
@@ -607,6 +1080,30 @@ const styles = StyleSheet.create({
   },
   tabTextActive: {
     color: Colors.accent,
+    fontWeight: '600',
+  },
+  tabTutorial: {
+    borderBottomWidth: 2,
+    borderBottomColor: Colors.warning,
+  },
+  tabTextTutorial: {
+    color: Colors.warning,
+    fontWeight: '700',
+  },
+  tabDimmed: {
+    opacity: 0.3,
+  },
+  tutorialBanner: {
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+  },
+  tutorialBannerText: {
+    color: Colors.warning,
+    fontSize: FontSize.sm,
     fontWeight: '600',
   },
   scroll: { flex: 1 },
@@ -645,8 +1142,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   campaignStartRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'column',
     gap: Spacing.sm,
     backgroundColor: Colors.surface,
     borderWidth: 1,
@@ -654,9 +1150,23 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     padding: Spacing.md,
   },
-  campaignStartText: {
-    flex: 1,
-    gap: Spacing.xs,
+  campaignStartRowHighlighted: {
+    borderColor: Colors.warning,
+    shadowColor: Colors.warning,
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 6,
+  },
+  campaignStartRowDimmed: {
+    opacity: 0.3,
+  },
+  campaignCategoryLabel: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.xs,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
   campaignName: {
     color: Colors.textPrimary,
@@ -670,15 +1180,15 @@ const styles = StyleSheet.create({
   segmentRow: {
     flexDirection: 'row',
     gap: Spacing.xs,
-    marginTop: Spacing.xs,
   },
   segmentBtn: {
     flex: 1,
     alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: Colors.border,
     borderRadius: Radius.sm,
-    paddingVertical: Spacing.xs,
+    paddingVertical: Spacing.md,
   },
   segmentBtnActive: {
     borderColor: Colors.accent,
@@ -686,49 +1196,60 @@ const styles = StyleSheet.create({
   },
   segmentBtnText: {
     color: Colors.textDim,
-    fontSize: FontSize.xs,
-    textTransform: 'capitalize',
+    fontSize: FontSize.sm,
+    textAlign: 'center',
   },
   segmentBtnTextActive: {
     color: Colors.accent,
     fontWeight: '700',
   },
-  setupRow: {
+  setupControls: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     gap: Spacing.sm,
   },
-  setupLabel: {
+  setupControl: {
+    flex: 1,
+    alignItems: 'center',
+    gap: Spacing.xs,
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Radius.sm,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.xs,
+  },
+  setupControlLabel: {
     color: Colors.textSecondary,
     fontSize: FontSize.xs,
-    minWidth: 52,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
   stepper: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.xs,
+    width: '100%',
   },
   stepBtn: {
-    width: 30,
-    height: 30,
+    width: 36,
+    height: 36,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: Colors.border,
     borderRadius: Radius.sm,
-    backgroundColor: Colors.surfaceRaised,
+    backgroundColor: Colors.surface,
   },
   stepBtnText: {
     color: Colors.textPrimary,
-    fontSize: FontSize.md,
+    fontSize: FontSize.lg,
     fontWeight: '700',
+    lineHeight: 20,
   },
   stepValue: {
-    minWidth: 78,
+    flex: 1,
     textAlign: 'center',
     color: Colors.textPrimary,
-    fontSize: FontSize.xs,
+    fontSize: FontSize.sm,
     fontWeight: '600',
   },
   campaignWarning: {
@@ -739,8 +1260,9 @@ const styles = StyleSheet.create({
   campaignStartBtn: {
     backgroundColor: Colors.accent,
     borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
+    paddingVertical: Spacing.md,
+    alignItems: 'center',
+    marginTop: Spacing.xs,
   },
   campaignStartBtnDisabled: {
     opacity: 0.45,
@@ -767,6 +1289,92 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     fontSize: FontSize.xs,
     textTransform: 'capitalize',
+  },
+  spotifyShelf: {
+    gap: Spacing.sm,
+    backgroundColor: '#111116',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    padding: Spacing.sm,
+  },
+  mediaRow: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surface,
+    padding: Spacing.sm,
+  },
+  emptyMediaRow: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: Colors.border,
+    padding: Spacing.sm,
+  },
+  albumArtPlaceholder: {
+    width: 52,
+    height: 52,
+    borderRadius: Radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#24242B',
+    borderWidth: 1,
+    borderColor: '#343442',
+  },
+  albumArtCenter: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    borderColor: Colors.textDim,
+  },
+  albumArtInitial: {
+    color: Colors.positive,
+    fontSize: FontSize.lg,
+    fontWeight: '800',
+  },
+  liveArtPlaceholder: {
+    width: 52,
+    height: 52,
+    borderRadius: Radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.positive,
+  },
+  liveArtText: {
+    color: '#06120B',
+    fontSize: FontSize.xs,
+    fontWeight: '900',
+  },
+  mediaText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  mediaTitle: {
+    color: Colors.textPrimary,
+    fontSize: FontSize.sm,
+    fontWeight: '800',
+  },
+  mediaMeta: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.xs,
+  },
+  mediaSubMeta: {
+    color: Colors.textDim,
+    fontSize: FontSize.xs,
+  },
+  mediaValue: {
+    color: Colors.positive,
+    fontSize: FontSize.xs,
+    fontWeight: '800',
   },
   infoRow: {
     flexDirection: 'row',
@@ -816,4 +1424,3 @@ const styles = StyleSheet.create({
   pos: { color: Colors.positive },
   neg: { color: Colors.negative },
 });
-

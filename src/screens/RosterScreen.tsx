@@ -4,11 +4,11 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RosterStackParamList } from '../navigation/types';
-import { useRunState, useManifest, useRoster, useMoney, useReputation, useTurnNumber, useRunStore } from '../store/useRunStore';
+import { useRunState, useManifest, useRoster, useMoney, useReputation, useTurnNumber, useRunStore, useTutorialStep, useTutorialFriendId } from '../store/useRunStore';
 import { TopBar }     from '../components/TopBar';
 import { ClientRow }  from '../components/ClientRow';
 import { Client }     from '../types/client';
-import { Colors, FontSize, Spacing } from '../theme';
+import { Colors, FontSize, Spacing, Radius } from '../theme';
 
 export type RosterScreenProps = NativeStackScreenProps<RosterStackParamList, 'RosterList'>;
 
@@ -16,10 +16,12 @@ export function RosterScreen() {
   const nav      = useNavigation<NativeStackNavigationProp<RosterStackParamList>>();
   const runState = useRunState();
   const manifest = useManifest();
-  const roster   = useRoster();
-  const money    = useMoney();
-  const rep      = useReputation();
-  const turnNum  = useTurnNumber();
+  const roster          = useRoster();
+  const money           = useMoney();
+  const rep             = useReputation();
+  const turnNum         = useTurnNumber();
+  const tutorialStep    = useTutorialStep();
+  const tutorialFriendId= useTutorialFriendId();
 
   if (!runState || !manifest) {
     return (
@@ -36,7 +38,7 @@ export function RosterScreen() {
 
   const contractStatus = (clientId: string): 'active' | 'expiring' | 'none' => {
     const contract = runState.contracts.find(
-      c => c.client_id === clientId && c.tier === 'agent_client',
+      c => c.client_id === clientId && c.tier === 'agent_client' && c.duration_remaining > 0,
     );
     if (!contract) return 'none';
     if (contract.duration_remaining <= 2) return 'expiring';
@@ -61,6 +63,15 @@ export function RosterScreen() {
         data={roster}
         keyExtractor={c => c.id}
         contentContainerStyle={styles.list}
+        ListHeaderComponent={
+          tutorialStep === 'roster_highlight' ? (
+            <View style={styles.tutorialBanner}>
+              <Text style={styles.tutorialBannerText}>
+                This is your roster. Tap on your artist to manage their career.
+              </Text>
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
           <View style={styles.emptyList}>
             <Text style={styles.emptyTitle}>No {labels.client}s signed yet</Text>
@@ -75,6 +86,7 @@ export function RosterScreen() {
             audienceLabel={labels.audience}
             hasCampaign={hasActiveCampaign(item.id)}
             contractStatus={contractStatus(item.id)}
+            highlighted={tutorialStep === 'roster_highlight' && item.id === tutorialFriendId}
             onPress={id => nav.navigate('ClientDetail', { clientId: id })}
           />
         )}
@@ -114,6 +126,20 @@ const styles = StyleSheet.create({
   emptyHint: {
     color: Colors.textDim,
     fontSize: FontSize.sm,
+    textAlign: 'center',
+  },
+  tutorialBanner: {
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+  },
+  tutorialBannerText: {
+    color: Colors.warning,
+    fontSize: FontSize.sm,
+    fontWeight: '600',
     textAlign: 'center',
   },
 });

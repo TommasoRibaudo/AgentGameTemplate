@@ -1,14 +1,19 @@
 import React from 'react';
 import { View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView } from 'react-native';
-import { GameEvent } from '../types/event';
+import { EventOutcome, GameEvent } from '../types/event';
 import { Colors, FontSize, Spacing, Radius, SeverityColors } from '../theme';
-import { formatMoney, formatDelta } from '../theme';
+import { DeltaText } from './DeltaText';
 
 export interface EventModalProps {
   event: GameEvent;
   clientName?: string;
   clientLabel?: string;
+  reputationLabel?: string;
+  resultOutcome?: EventOutcome | null;
+  resultLabel?: string | null;
+  resultDescription?: string | null;
   onResolve: (eventId: string, optionKey: string | null) => void;
+  onCloseResult?: () => void;
 }
 
 const SEVERITY_LABELS: Record<string, string> = {
@@ -17,8 +22,20 @@ const SEVERITY_LABELS: Record<string, string> = {
   crisis: 'CRISIS',
 };
 
-export function EventModal({ event, clientName, clientLabel = 'Client', onResolve }: EventModalProps) {
+export function EventModal({
+  event,
+  clientName,
+  clientLabel = 'Client',
+  reputationLabel = 'Reputation',
+  resultOutcome = null,
+  resultLabel = null,
+  resultDescription = null,
+  onResolve,
+  onCloseResult,
+}: EventModalProps) {
   const severityColor = SeverityColors[event.severity] ?? Colors.warning;
+  const options = Array.isArray(event.options) ? event.options : [];
+  const isShowingResult = resultOutcome !== null;
 
   return (
     <Modal
@@ -43,19 +60,45 @@ export function EventModal({ event, clientName, clientLabel = 'Client', onResolv
 
             <Text style={styles.description}>{event.description}</Text>
 
-            <View style={styles.options}>
-              {event.options.map(opt => (
+            {isShowingResult ? (
+              <View style={styles.result}>
+                <Text style={styles.resultTitle}>{resultLabel ?? 'Result'}</Text>
+                {resultDescription && (
+                  <Text style={styles.resultBody}>{resultDescription}</Text>
+                )}
+                <OutcomeSummary outcome={resultOutcome} reputationLabel={reputationLabel} />
                 <TouchableOpacity
-                  key={opt.key}
-                  style={styles.optionBtn}
-                  onPress={() => onResolve(event.id, opt.key)}
-                  accessibilityLabel={opt.label}
+                  style={styles.closeBtn}
+                  onPress={onCloseResult}
+                  accessibilityLabel="Close event result"
                 >
-                  <Text style={styles.optionLabel}>{opt.label}</Text>
-                  <OutcomePreview outcome={opt.outcome} compact />
+                  <Text style={styles.closeBtnText}>Close</Text>
                 </TouchableOpacity>
-              ))}
-            </View>
+              </View>
+            ) : (
+              <View style={styles.options}>
+                {options.length > 0 ? options.map(opt => (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={styles.optionBtn}
+                    onPress={() => onResolve(event.id, opt.key)}
+                    accessibilityLabel={opt.label}
+                  >
+                    <Text style={styles.optionLabel}>{opt.label}</Text>
+                    <OutcomeCostPreview outcome={opt.outcome} reputationLabel={reputationLabel} compact />
+                  </TouchableOpacity>
+                )) : (
+                  <TouchableOpacity
+                    style={styles.optionBtn}
+                    onPress={() => onResolve(event.id, null)}
+                    accessibilityLabel="Ignore event"
+                  >
+                    <Text style={styles.optionLabel}>Ignore</Text>
+                    <OutcomeCostPreview outcome={event.default_outcome} reputationLabel={reputationLabel} compact />
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
           </ScrollView>
         </View>
       </View>
@@ -63,29 +106,52 @@ export function EventModal({ event, clientName, clientLabel = 'Client', onResolv
   );
 }
 
-function OutcomePreview({
+function OutcomeCostPreview({
   outcome,
+  reputationLabel: _reputationLabel,
   compact,
 }: {
   outcome: { money_delta: number; reputation_delta: number };
+  reputationLabel: string;
   compact?: boolean;
 }) {
-  const hasMoney = outcome.money_delta !== 0;
-  const hasRep   = outcome.reputation_delta !== 0;
-  if (!hasMoney && !hasRep) return null;
+  const hasMoney = outcome.money_delta < 0;
+  if (!hasMoney) return null;
 
   return (
     <View style={compact ? styles.outcomeLine : styles.outcomeBlock}>
       {hasMoney && (
-        <Text style={[styles.delta, outcome.money_delta < 0 ? styles.neg : styles.pos]}>
-          {formatMoney(outcome.money_delta)}
-        </Text>
+        <DeltaText value={outcome.money_delta} kind="money" style={styles.delta} />
       )}
-      {hasRep && (
-        <Text style={[styles.delta, outcome.reputation_delta < 0 ? styles.neg : styles.pos]}>
-          {formatDelta(outcome.reputation_delta)} rep
-        </Text>
+    </View>
+  );
+}
+
+function OutcomeSummary({
+  outcome,
+  reputationLabel,
+}: {
+  outcome: EventOutcome;
+  reputationLabel: string;
+}) {
+  const statEntries = Object.entries(outcome.stat_deltas).filter(([, value]) => value !== 0);
+  const hasChanges = outcome.money_delta !== 0 || outcome.reputation_delta !== 0 || statEntries.length > 0;
+
+  if (!hasChanges) {
+    return <Text style={styles.resultBody}>No immediate change.</Text>;
+  }
+
+  return (
+    <View style={styles.resultDeltas}>
+      {outcome.money_delta !== 0 && (
+        <DeltaText value={outcome.money_delta} kind="money" style={styles.delta} />
       )}
+      {outcome.reputation_delta !== 0 && (
+        <DeltaText value={outcome.reputation_delta} label={reputationLabel} style={styles.delta} />
+      )}
+      {statEntries.map(([key, value]) => (
+        <DeltaText key={key} value={value} label={key} style={styles.delta} />
+      ))}
     </View>
   );
 }
@@ -149,6 +215,42 @@ const styles = StyleSheet.create({
     fontSize: FontSize.md,
     fontWeight: '600',
   },
+  result: {
+    backgroundColor: Colors.surfaceRaised,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.md,
+    gap: Spacing.sm,
+  },
+  resultTitle: {
+    color: Colors.textPrimary,
+    fontSize: FontSize.md,
+    fontWeight: '700',
+  },
+  resultBody: {
+    color: Colors.textSecondary,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+  },
+  resultDeltas: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  closeBtn: {
+    marginTop: Spacing.xs,
+    backgroundColor: Colors.accent,
+    borderRadius: Radius.md,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    alignItems: 'center',
+  },
+  closeBtnText: {
+    color: Colors.textPrimary,
+    fontSize: FontSize.sm,
+    fontWeight: '700',
+  },
   outcomeLine: {
     flexDirection: 'row',
     gap: Spacing.sm,
@@ -161,6 +263,4 @@ const styles = StyleSheet.create({
     fontSize: FontSize.sm,
     fontWeight: '600',
   },
-  pos: { color: Colors.positive },
-  neg: { color: Colors.negative },
 });

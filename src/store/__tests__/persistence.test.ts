@@ -43,6 +43,18 @@ describe('persistence — saveRun / loadRun', () => {
     expect(loaded!.phase).toBe('decision');
   });
 
+  it('hydrates missing optional fields from saves that predate them', async () => {
+    const state = makeRunState();
+    const { pinned_client_ids, dismissed_auto_client_ids, fired_one_time_keys, ...legacyState } = state;
+    mockStorage['run_active'] = JSON.stringify({ version: 3, state: legacyState });
+
+    const loaded = await loadRun();
+
+    expect(loaded!.pinned_client_ids).toEqual([]);
+    expect(loaded!.dismissed_auto_client_ids).toEqual([]);
+    expect(loaded!.fired_one_time_keys).toEqual([]);
+  });
+
   it('returns null when nothing is saved', async () => {
     const loaded = await loadRun();
     expect(loaded).toBeNull();

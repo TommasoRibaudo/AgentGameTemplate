@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, SafeAreaView,
 } from 'react-native';
@@ -47,20 +47,33 @@ export function CareerSummaryScreen({ navigation }: CareerSummaryScreenProps) {
   const score = computeCareerScore(runState);
   const endColor = END_COLORS[endCondition] ?? Colors.textSecondary;
   const endLabel = END_LABELS[endCondition] ?? 'Career Over';
+  const reputationLabel = manifest.labels.reputation;
 
-  function handleStartNew() {
-    if (runState && manifest) {
+  useEffect(() => {
+    if (runState.end_condition) {
       recordRunCompletion(runState, manifest);
     }
+  }, [runState.id, runState.end_condition, manifest.id, recordRunCompletion]);
+
+  function recordCurrentRun() {
+    if (runState && manifest && runState.end_condition) {
+      recordRunCompletion(runState, manifest);
+    }
+  }
+
+  function handleStartNew() {
+    recordCurrentRun();
     useRunStore.getState().clearRun();
     navigation.replace('NewCareer');
   }
 
   function handleLeaderboard() {
+    recordCurrentRun();
     navigation.navigate('Leaderboard');
   }
 
   function handleAchievements() {
+    recordCurrentRun();
     navigation.navigate('Achievements');
   }
 
@@ -76,9 +89,9 @@ export function CareerSummaryScreen({ navigation }: CareerSummaryScreenProps) {
 
         {/* Stats */}
         <View style={styles.statsGrid}>
-          <StatCell label="Peak Rep"     value={String(runState.peak_reputation)} />
+          <StatCell label={`Peak ${reputationLabel}`} value={String(runState.peak_reputation)} />
           <StatCell label="Total Earned" value={formatMoney(runState.total_earnings)} />
-          <StatCell label="Turns"        value={String(runState.turn_number)} />
+          <StatCell label="Weeks"        value={String(runState.turn_number)} />
           <StatCell label="At Peak"      value={String(runState.clients_developed)} />
         </View>
 

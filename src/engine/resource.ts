@@ -65,12 +65,12 @@ export const applyReputationDelta: ApplyReputationDelta = (state, delta) => {
   };
 };
 
-// ─── Monthly income / expenses ────────────────────────────────────────────────
+// ─── Weekly income / expenses ────────────────────────────────────────────────
 
-export type ComputeMonthlyIncome = (state: RunState) => number;
+export type ComputeWeeklyIncome = (state: RunState) => number;
 
 // Income = sum over all clients of: entity_contract.amount × (agent_contract.your_cut / 100)
-export const computeMonthlyIncome: ComputeMonthlyIncome = (state) => {
+export const computeWeeklyIncome: ComputeWeeklyIncome = (state) => {
   let total = 0;
   for (const client of state.roster) {
     if (!client.agent_contract_id) continue;
@@ -80,7 +80,7 @@ export const computeMonthlyIncome: ComputeMonthlyIncome = (state) => {
     const entityContracts = state.contracts.filter(
       c => c.tier === 'client_entity'
         && c.client_id === client.id
-        && c.payout_type === 'per_month',
+        && c.payout_type === 'per_week',
     );
     for (const ec of entityContracts) {
       total += ec.amount * (agentContract.your_cut / 100);
@@ -89,11 +89,11 @@ export const computeMonthlyIncome: ComputeMonthlyIncome = (state) => {
   return Math.round(total);
 };
 
-export type ComputeMonthlyExpenses = (state: RunState, manifest: VariantManifest) => number;
+export type ComputeWeeklyExpenses = (state: RunState, manifest: VariantManifest) => number;
 
 // Expenses = overhead + client obligations, both reduced by Operations level.
 // Defense track recurring costs are NOT reduced by Operations (they're infrastructure costs).
-export const computeMonthlyExpenses: ComputeMonthlyExpenses = (state, manifest) => {
+export const computeWeeklyExpenses: ComputeWeeklyExpenses = (state, manifest) => {
   const opsMult = computeOperationsMultiplier(state.agent.stats.operations);
   let total = manifest.economy.overhead_per_turn * opsMult;
 
@@ -157,6 +157,18 @@ const checkObjectiveCondition = (
       const client = clientId ? state.roster.find(c => c.id === clientId) : null;
       return (client?.stats.form.true_value ?? 0) >= 70;
     }
+    case 'album_released': {
+      const client = clientId ? state.roster.find(c => c.id === clientId) : null;
+      return client?.catalog_releases.some(r => r.kind === 'album') ?? false;
+    }
+    case 'two_albums_released': {
+      const client = clientId ? state.roster.find(c => c.id === clientId) : null;
+      return (client?.catalog_releases.filter(r => r.kind === 'album').length ?? 0) >= 2;
+    }
+    case 'fans_500k': {
+      const client = clientId ? state.roster.find(c => c.id === clientId) : null;
+      return (client?.audience ?? 0) >= 500_000;
+    }
     case 'turns_active_4':
       return contractTurnsActive >= 4;
     case 'turns_active_8':
@@ -219,7 +231,7 @@ export const estimateClientAssetValue: EstimateClientAssetValue = (state, client
   for (const ec of entityContracts) {
     const cut = getAgentCutPercent(state, clientId);
 
-    if (ec.payout_type === 'per_month') {
+    if (ec.payout_type === 'per_week') {
       value += ec.amount * (cut / 100) * ec.duration_remaining * arcMult * audiencePremium;
     } else if (ec.payout_type === 'lump_sum') {
       value += ec.amount * (cut / 100) * arcMult * audiencePremium;

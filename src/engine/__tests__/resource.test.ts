@@ -1,5 +1,6 @@
-import { applyMoneyDelta, applyReputationDelta, computeMonthlyIncome, computeMonthlyExpenses, computeRepTier, settleObjectivePayouts, evaluateObjectiveConditions, estimateClientAssetValue, MAX_REPUTATION, MIN_REPUTATION } from '../resource';
+import { applyMoneyDelta, applyReputationDelta, computeWeeklyIncome, computeWeeklyExpenses, computeRepTier, settleObjectivePayouts, evaluateObjectiveConditions, estimateClientAssetValue, MAX_REPUTATION, MIN_REPUTATION } from '../resource';
 import { makeRunState, makeClient, makeContract, makeManifest, makeObjective, makeClientStats, makeAgentState, nextId } from './fixtures';
+import { MUSIC_MANIFEST } from '../../manifest/variants/music';
 
 describe('resource — applyMoneyDelta', () => {
   it('adds positive delta', () => {
@@ -65,9 +66,9 @@ describe('resource — applyReputationDelta', () => {
   });
 });
 
-describe('resource — computeMonthlyIncome', () => {
+describe('resource — computeWeeklyIncome', () => {
   it('returns 0 with empty roster', () => {
-    expect(computeMonthlyIncome(makeRunState())).toBe(0);
+    expect(computeWeeklyIncome(makeRunState())).toBe(0);
   });
 
   it('computes cut from entity contracts', () => {
@@ -76,25 +77,25 @@ describe('resource — computeMonthlyIncome', () => {
     const client = makeClient({ id: clientId, agent_contract_id: agentContractId });
     const agentContract = makeContract({
       id: agentContractId, tier: 'agent_client', client_id: clientId,
-      your_cut: 20, payout_type: 'per_month', amount: 0,
+      your_cut: 20, payout_type: 'per_week', amount: 0,
     });
     const entityContract = makeContract({
       tier: 'client_entity', client_id: clientId, entity_id: nextId(),
-      payout_type: 'per_month', amount: 10_000, your_cut: null,
+      payout_type: 'per_week', amount: 10_000, your_cut: null,
     });
     const state = makeRunState({ roster: [client], contracts: [agentContract, entityContract] });
     // 20% of 10,000 = 2,000
-    expect(computeMonthlyIncome(state)).toBe(2000);
+    expect(computeWeeklyIncome(state)).toBe(2000);
   });
 
-  it('ignores lump_sum and per_objective contracts in monthly income', () => {
+  it('ignores lump_sum and per_objective contracts in weekly income', () => {
     const clientId = nextId();
     const agentContractId = nextId();
     const client = makeClient({ id: clientId, agent_contract_id: agentContractId });
     const agentContract = makeContract({ id: agentContractId, tier: 'agent_client', client_id: clientId, your_cut: 15 });
     const lumpContract  = makeContract({ tier: 'client_entity', client_id: clientId, payout_type: 'lump_sum', amount: 50_000 });
     const state = makeRunState({ roster: [client], contracts: [agentContract, lumpContract] });
-    expect(computeMonthlyIncome(state)).toBe(0);
+    expect(computeWeeklyIncome(state)).toBe(0);
   });
 
   it('skips client when agent contract has your_cut === null', () => {
@@ -103,16 +104,21 @@ describe('resource — computeMonthlyIncome', () => {
     const client = makeClient({ id: clientId, agent_contract_id: agentCtId });
     // your_cut: null — this client's entity contracts should not contribute
     const agentContract  = makeContract({ id: agentCtId, tier: 'agent_client', client_id: clientId, your_cut: null });
-    const entityContract = makeContract({ tier: 'client_entity', client_id: clientId, payout_type: 'per_month', amount: 10_000 });
+    const entityContract = makeContract({ tier: 'client_entity', client_id: clientId, payout_type: 'per_week', amount: 10_000 });
     const state = makeRunState({ roster: [client], contracts: [agentContract, entityContract] });
-    expect(computeMonthlyIncome(state)).toBe(0);
+    expect(computeWeeklyIncome(state)).toBe(0);
   });
 });
 
-describe('resource — computeMonthlyExpenses', () => {
+describe('resource — computeWeeklyExpenses', () => {
+  it('does not charge base overhead in the music variant', () => {
+    const expenses = computeWeeklyExpenses(makeRunState(), MUSIC_MANIFEST);
+    expect(expenses).toBe(0);
+  });
+
   it('returns at least the overhead from manifest', () => {
     const manifest = makeManifest();
-    const expenses = computeMonthlyExpenses(makeRunState(), manifest);
+    const expenses = computeWeeklyExpenses(makeRunState(), manifest);
     expect(expenses).toBeGreaterThan(0);
     expect(expenses).toBeLessThanOrEqual(manifest.economy.overhead_per_turn);
   });
@@ -123,15 +129,15 @@ describe('resource — computeMonthlyExpenses', () => {
     const agentContractId = nextId();
     const client = makeClient({ id: clientId, agent_contract_id: agentContractId });
     const agentContract = makeContract({ id: agentContractId, tier: 'agent_client', client_id: clientId, obligations_per_turn: 200 });
-    const base = computeMonthlyExpenses(makeRunState(), manifest);
-    const withClient = computeMonthlyExpenses(makeRunState({ roster: [client], contracts: [agentContract] }), manifest);
+    const base = computeWeeklyExpenses(makeRunState(), manifest);
+    const withClient = computeWeeklyExpenses(makeRunState({ roster: [client], contracts: [agentContract] }), manifest);
     expect(withClient).toBeGreaterThan(base);
   });
 
   it('adds per_turn_cost from active defense tracks', () => {
     const manifest = makeManifest();
-    const base = computeMonthlyExpenses(makeRunState(), manifest);
-    const withTrack = computeMonthlyExpenses(
+    const base = computeWeeklyExpenses(makeRunState(), manifest);
+    const withTrack = computeWeeklyExpenses(
       makeRunState({ agent: makeAgentState({ defense_tracks: [{ key: 'pr', level: 1, per_turn_cost: 300 }] }) }),
       manifest,
     );
@@ -143,8 +149,8 @@ describe('resource — computeMonthlyExpenses', () => {
     const clientId = nextId();
     // Client has agent_contract_id pointing to a non-existent contract
     const client = makeClient({ id: clientId, agent_contract_id: 'ghost_contract_id' });
-    const base     = computeMonthlyExpenses(makeRunState(), manifest);
-    const withGhost = computeMonthlyExpenses(makeRunState({ roster: [client] }), manifest);
+    const base     = computeWeeklyExpenses(makeRunState(), manifest);
+    const withGhost = computeWeeklyExpenses(makeRunState({ roster: [client] }), manifest);
     // Ghost contract not found → ac is falsy → no obligation added
     expect(withGhost).toBe(base);
   });
@@ -199,11 +205,63 @@ describe('resource — settleObjectivePayouts', () => {
 // ─── evaluateObjectiveConditions ─────────────────────────────────────────────
 
 describe('resource — evaluateObjectiveConditions', () => {
+  const makeCatalogAlbum = (overrides = {}) => ({
+    id: nextId(),
+    campaign_id: nextId(),
+    kind: 'album' as const,
+    type_key: 'album_cycle',
+    title: 'Test Album',
+    songs: [],
+    released_turn: 1,
+    turns_since_release: 0,
+    album_units_sold: 0,
+    total_streams: 0,
+    album_income_total: 0,
+    stream_income_total: 0,
+    latest_turn_album_units: 0,
+    latest_turn_streams: 0,
+    latest_turn_income: 0,
+    latest_turn_fan_gain: 0,
+    total_fan_gain: 0,
+    is_selling_albums: true,
+    ...overrides,
+  });
+
   it('marks peak_arc objective as is_met when client is at peak stage', () => {
     const clientId = nextId();
     const client   = makeClient({ id: clientId, arc_stage: 'peak' });
     const obj      = makeObjective({ condition_key: 'peak_arc', is_met: false });
     const contract = makeContract({ client_id: clientId, payout_type: 'per_objective', objectives: [obj] });
+    const state    = makeRunState({ roster: [client], contracts: [contract] });
+    const result   = evaluateObjectiveConditions(state);
+    expect(result.contracts[0].objectives[0].is_met).toBe(true);
+  });
+
+  it('marks album_released when the client has a catalog album', () => {
+    const clientId = nextId();
+    const client   = makeClient({ id: clientId, catalog_releases: [makeCatalogAlbum()] });
+    const obj      = makeObjective({ condition_key: 'album_released', is_met: false });
+    const contract = makeContract({ client_id: clientId, objectives: [obj] });
+    const state    = makeRunState({ roster: [client], contracts: [contract] });
+    const result   = evaluateObjectiveConditions(state);
+    expect(result.contracts[0].objectives[0].is_met).toBe(true);
+  });
+
+  it('marks two_albums_released when the client has two catalog albums', () => {
+    const clientId = nextId();
+    const client   = makeClient({ id: clientId, catalog_releases: [makeCatalogAlbum(), makeCatalogAlbum()] });
+    const obj      = makeObjective({ condition_key: 'two_albums_released', is_met: false });
+    const contract = makeContract({ client_id: clientId, objectives: [obj] });
+    const state    = makeRunState({ roster: [client], contracts: [contract] });
+    const result   = evaluateObjectiveConditions(state);
+    expect(result.contracts[0].objectives[0].is_met).toBe(true);
+  });
+
+  it('marks fans_500k when the client audience reaches 500k', () => {
+    const clientId = nextId();
+    const client   = makeClient({ id: clientId, audience: 500_000 });
+    const obj      = makeObjective({ condition_key: 'fans_500k', is_met: false });
+    const contract = makeContract({ client_id: clientId, objectives: [obj] });
     const state    = makeRunState({ roster: [client], contracts: [contract] });
     const result   = evaluateObjectiveConditions(state);
     expect(result.contracts[0].objectives[0].is_met).toBe(true);
@@ -304,12 +362,12 @@ describe('resource — estimateClientAssetValue', () => {
     expect(value).toBe(0);
   });
 
-  it('estimates value from a per_month entity contract', () => {
+  it('estimates value from a per_week entity contract', () => {
     const clientId      = nextId();
     const agentCtId     = nextId();
     const client        = makeClient({ id: clientId, agent_contract_id: agentCtId });
     const agentContract = makeContract({ id: agentCtId, tier: 'agent_client', client_id: clientId, your_cut: 20 });
-    const entityContract = makeContract({ tier: 'client_entity', client_id: clientId, entity_id: nextId(), payout_type: 'per_month', amount: 10_000, your_cut: null, duration_remaining: 6 });
+    const entityContract = makeContract({ tier: 'client_entity', client_id: clientId, entity_id: nextId(), payout_type: 'per_week', amount: 10_000, your_cut: null, duration_remaining: 6 });
     const state = makeRunState({ roster: [client], contracts: [agentContract, entityContract] });
     const value = estimateClientAssetValue(state, clientId, makeManifest());
     expect(value).toBeGreaterThan(0);
@@ -320,8 +378,8 @@ describe('resource — estimateClientAssetValue', () => {
     const highClientId = nextId();
     const lowClient = makeClient({ id: lowClientId, audience: 1_000 });
     const highClient = makeClient({ id: highClientId, audience: 1_000_000 });
-    const lowContract = makeContract({ tier: 'client_entity', client_id: lowClientId, payout_type: 'per_month', amount: 10_000, duration_remaining: 6 });
-    const highContract = makeContract({ tier: 'client_entity', client_id: highClientId, payout_type: 'per_month', amount: 10_000, duration_remaining: 6 });
+    const lowContract = makeContract({ tier: 'client_entity', client_id: lowClientId, payout_type: 'per_week', amount: 10_000, duration_remaining: 6 });
+    const highContract = makeContract({ tier: 'client_entity', client_id: highClientId, payout_type: 'per_week', amount: 10_000, duration_remaining: 6 });
     const manifest = makeManifest();
     const lowValue = estimateClientAssetValue(makeRunState({ roster: [lowClient], contracts: [lowContract] }), lowClientId, manifest);
     const highValue = estimateClientAssetValue(makeRunState({ roster: [highClient], contracts: [highContract] }), highClientId, manifest);
@@ -360,7 +418,7 @@ describe('resource — estimateClientAssetValue', () => {
   it('uses default cut of 15 when client has no agent_contract_id', () => {
     const clientId       = nextId();
     const client         = makeClient({ id: clientId, agent_contract_id: null });
-    const entityContract = makeContract({ tier: 'client_entity', client_id: clientId, payout_type: 'per_month', amount: 10_000, your_cut: null, duration_remaining: 6 });
+    const entityContract = makeContract({ tier: 'client_entity', client_id: clientId, payout_type: 'per_week', amount: 10_000, your_cut: null, duration_remaining: 6 });
     const state = makeRunState({ roster: [client], contracts: [entityContract] });
     // agentContract null → cut defaults to 15
     const value = estimateClientAssetValue(state, clientId, makeManifest());

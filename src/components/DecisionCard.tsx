@@ -4,16 +4,19 @@ import { DecisionItem } from '../types/decision';
 import { Contract, ContractDraft } from '../types/contract';
 import { ContractSummary } from './ContractSummary';
 import { canCounterDecisionItem } from './decision-card-rules';
-import { Colors, FontSize, Spacing, Radius, formatDelta, formatMoney } from '../theme';
+import { Colors, FontSize, Spacing, Radius } from '../theme';
+import { DeltaText } from './DeltaText';
 
 export interface DecisionCardProps {
   item: DecisionItem;
   clientName?: string;
   clientLabel?: string;
   entityLabel?: string;
+  reputationLabel?: string;
   agentCutPercent?: number | null;
   isPushEnabled: boolean;
   previousContract?: Contract | null;
+  isTutorial?: boolean;
   onResolve: (itemId: string, optionKey: string) => void;
   onOpenCounter: (itemId: string, draft: ContractDraft) => void;
 }
@@ -37,22 +40,23 @@ export function DecisionCard({
   clientName,
   clientLabel = 'Client',
   entityLabel = 'Entity',
+  reputationLabel = 'Reputation',
   agentCutPercent,
   isPushEnabled,
   previousContract,
+  isTutorial = false,
   onResolve,
   onOpenCounter,
 }: DecisionCardProps) {
   const isExpiringSoon = item.expires_in !== null && item.expires_in <= 1;
-  const typeColor = TYPE_COLORS[item.type] ?? Colors.textSecondary;
+  const typeColor = isTutorial ? Colors.warning : (TYPE_COLORS[item.type] ?? Colors.textSecondary);
   const visibleOptions = item.options.filter(
     o => o.key !== 'push' || isPushEnabled,
   );
   const canCounter = canCounterDecisionItem(item);
-  const resolvedSummary = formatOutcomeSummary(item.resolved_outcome);
 
   return (
-    <View style={[styles.card, isExpiringSoon && styles.cardUrgent]}>
+    <View style={[styles.card, isExpiringSoon && styles.cardUrgent, isTutorial && styles.cardTutorial]}>
       <View style={styles.header}>
         <View style={[styles.typeBadge, { backgroundColor: typeColor + '22', borderColor: typeColor }]}>
           <Text style={[styles.typeText, { color: typeColor }]}>
@@ -86,11 +90,13 @@ export function DecisionCard({
       {item.is_resolved ? (
         <View style={styles.result}>
           <Text style={styles.resultTitle}>{item.resolved_result_label ?? 'Resolved'}</Text>
-          <Text style={styles.resultBody}>
-            {item.resolved_result_description ?? resolvedSummary}
-          </Text>
+          {item.resolved_result_description ? (
+            <Text style={styles.resultBody}>{item.resolved_result_description}</Text>
+          ) : (
+            <OutcomeSummaryText outcome={item.resolved_outcome} reputationLabel={reputationLabel} style={styles.resultBody} />
+          )}
           {item.resolved_result_description && item.resolved_outcome && (
-            <Text style={styles.resultDelta}>{resolvedSummary}</Text>
+            <OutcomeSummaryText outcome={item.resolved_outcome} reputationLabel={reputationLabel} style={styles.resultDelta} />
           )}
         </View>
       ) : (
@@ -102,9 +108,7 @@ export function DecisionCard({
               onPress={() => onResolve(item.id, opt.key)}
               accessibilityLabel={opt.label}
             >
-              <Text style={[styles.optionText, opt.key === 'reject' && styles.optionRejectText]}>
-                {formatOptionLabel(opt)}
-              </Text>
+              <OptionLabel option={opt} isReject={opt.key === 'reject'} reputationLabel={reputationLabel} />
             </TouchableOpacity>
           ))}
           {canCounter && item.contract_draft && (
@@ -122,27 +126,87 @@ export function DecisionCard({
   );
 }
 
-function formatOptionLabel(option: DecisionItem['options'][number]): string {
-  const deltas: string[] = [];
-  const outcome = option.outcome;
-  if (outcome.money_delta !== 0) deltas.push(formatMoney(outcome.money_delta));
-  if (outcome.reputation_delta !== 0) deltas.push(`${formatDelta(outcome.reputation_delta)} rep`);
-  if (option.key === 'push' && option.push_risk) deltas.push('uncertain');
-  if (option.random_outcomes?.length) {
-    deltas.push('chance');
+type OutcomePart =
+  | { type: 'delta'; value: number; kind?: 'money' | 'number'; label?: string }
+  | { type: 'text'; text: string };
+
+function OptionLabel({
+  option,
+  isReject,
+  reputationLabel,
+}: {
+  option: DecisionItem['options'][number];
+  isReject: boolean;
+  reputationLabel: string;
+}) {
+  const parts = formatOptionParts(option, reputationLabel);
+
+  if (parts.length === 0) {
+    return <Text style={[styles.optionText, isReject && styles.optionRejectText]}>{option.label}</Text>;
   }
-  return deltas.length ? `${option.label} (${deltas.join(', ')})` : option.label;
+
+  return (
+    <Text style={[styles.optionText, isReject && styles.optionRejectText]}>
+      {option.label} (
+      {parts.map((part, index) => (
+        <React.Fragment key={`${part.type}-${index}`}>
+          {index > 0 ? ', ' : ''}
+          <OutcomePartText part={part} />
+        </React.Fragment>
+      ))}
+      )
+    </Text>
+  );
 }
 
-function formatOutcomeSummary(outcome?: DecisionItem['resolved_outcome']): string {
-  if (!outcome) return 'No immediate change.';
-  const deltas: string[] = [];
-  if (outcome.money_delta !== 0) deltas.push(formatMoney(outcome.money_delta));
-  if (outcome.reputation_delta !== 0) deltas.push(`${formatDelta(outcome.reputation_delta)} rep`);
-  for (const [key, delta] of Object.entries(outcome.stat_deltas)) {
-    if (delta !== 0) deltas.push(`${formatDelta(delta)} ${key}`);
+function OutcomeSummaryText({
+  outcome,
+  reputationLabel,
+  style,
+}: {
+  outcome?: DecisionItem['resolved_outcome'];
+  reputationLabel: string;
+  style: object;
+}) {
+  const parts = formatOutcomeParts(outcome, reputationLabel);
+
+  if (parts.length === 0) {
+    return <Text style={style}>No immediate change.</Text>;
   }
-  return deltas.length ? deltas.join(', ') : 'No immediate change.';
+
+  return (
+    <Text style={style}>
+      {parts.map((part, index) => (
+        <React.Fragment key={`${part.type}-${index}`}>
+          {index > 0 ? ', ' : ''}
+          <OutcomePartText part={part} />
+        </React.Fragment>
+      ))}
+    </Text>
+  );
+}
+
+function OutcomePartText({ part }: { part: OutcomePart }) {
+  if (part.type === 'text') return <Text>{part.text}</Text>;
+  return <DeltaText value={part.value} kind={part.kind} label={part.label} />;
+}
+
+function formatOptionParts(option: DecisionItem['options'][number], _reputationLabel: string): OutcomePart[] {
+  const parts: OutcomePart[] = [];
+  const outcome = option.outcome;
+  if (outcome.money_delta < 0) parts.push({ type: 'delta', value: outcome.money_delta, kind: 'money' });
+  return parts;
+}
+
+function formatOutcomeParts(outcome: DecisionItem['resolved_outcome'] | undefined, reputationLabel: string): OutcomePart[] {
+  if (!outcome) return [];
+  const parts: OutcomePart[] = [];
+  if (outcome.money_delta !== 0) parts.push({ type: 'delta', value: outcome.money_delta, kind: 'money' });
+  if (outcome.reputation_delta !== 0) parts.push({ type: 'delta', value: outcome.reputation_delta, label: reputationLabel });
+  for (const [key, delta] of Object.entries(outcome.stat_deltas)) {
+    if (delta !== 0) parts.push({ type: 'delta', value: delta, label: key });
+  }
+  return parts;
 }
 
 function optionStyle(key: string): object {
@@ -164,6 +228,14 @@ const styles = StyleSheet.create({
   },
   cardUrgent: {
     borderColor: Colors.warning,
+  },
+  cardTutorial: {
+    borderColor: Colors.warning,
+    shadowColor: Colors.warning,
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 7,
   },
   header: {
     flexDirection: 'row',

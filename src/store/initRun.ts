@@ -39,16 +39,25 @@ export function createNewRun(manifest: VariantManifest, playerName = manifest.la
     clients_developed: 0,
 
     agent,
-    roster:            [],
-    prospects:         generateProspects(computeProspectPoolSize(manifest.economy.starting_reputation), new Set(), manifest.economy.starting_reputation),
+    roster:                    [],
+    pinned_client_ids:         [],
+    dismissed_auto_client_ids: [],
+    fired_one_time_keys:       [],
+    prospects:                 generateProspects(computeProspectPoolSize(manifest.economy.starting_reputation), new Set(), manifest.economy.starting_reputation, 1),
     contracts:         [],
     campaigns:         [],
     pending_events:    [],
     resolved_events:   [],
     decision_board:    [],
+    narrator_pacing:   { consecutive_skipped_turns: 0, last_turn_skipped_items: 0 },
     news_feed:         [],
+    pending_release_summaries: [],
 
     is_active:     true,
     end_condition: null,
+
+    tutorial_step:        manifest.id === 'music_v1' ? 'friend_pitch' : null,
+    tutorial_friend_id:   null,
+    tutorial_prospect_id: null,
   };
 }

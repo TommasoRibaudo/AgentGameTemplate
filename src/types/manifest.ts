@@ -1,4 +1,5 @@
 import { ArcStage, CoreStatKey, EventCategory, EventSeverity, PayoutType, StatDeltas } from './primitives';
+import { CampaignSize } from './campaign';
 import { ContractTemplate } from './contract';
 
 // Every variant must supply a manifest satisfying this interface.
@@ -35,7 +36,9 @@ export interface EntityTypeDefinition {
 export interface CampaignTypeDefinition {
   key: string;
   label: string;
-  release_kind?: 'album' | 'single';
+  release_kind?: 'album' | 'single' | 'mixtape';
+  // When true, the client must have an active label contract to start this campaign.
+  requires_label_contract?: boolean;
   total_turns: number;
   // Form is the primary driver; variance is layered on top
   form_weight: number;
@@ -48,6 +51,14 @@ export interface CampaignTypeDefinition {
   // installment roll above this threshold can trigger a trait grant
   trait_trigger_threshold: number;
   valid_arc_stages: ArcStage[];
+  // variant-specific display labels for each campaign size option
+  size_labels?: Partial<Record<CampaignSize, string>>;
+  // If set, startCampaign auto-links unmet objectives from any active client_entity contract
+  // with this exclusivity_scope. Also gates start: if the scope is configured but no matching
+  // contract is active, the campaign cannot begin.
+  auto_link_contract_scope?: string;
+  // When true, this campaign type is not player-selectable; it can only be started by events.
+  event_only?: boolean;
 }
 
 // §5.1.5 — trait library entry
@@ -84,7 +95,12 @@ export interface EventOptionDefinition {
     money_delta: number;
     reputation_delta: number;
     stat_deltas: StatDeltas;
+    // Applies to a linked campaign's pending release plan when present.
+    release_quality_delta?: number;
+    // If true, resolving this option cancels the linked active campaign.
+    cancels_campaign?: boolean;
   };
+  result_description?: string | null;
 }
 
 export interface EventDefinition {
@@ -94,12 +110,17 @@ export interface EventDefinition {
   description_template: string;   // may include {client_name} etc. for substitution
   // If present, this event can only fire while one of these campaign types is active.
   campaign_type_keys?: string[];
+  // If present, this event can only fire when at least one active contract with this
+  // exclusivity_scope exists; the event is targeted at that client.
+  requires_active_scope?: string;
   options: EventOptionDefinition[];
   // fires when the turn ends with the event still unresolved
   default_outcome: {
     money_delta: number;
     reputation_delta: number;
     stat_deltas: StatDeltas;
+    release_quality_delta?: number;
+    cancels_campaign?: boolean;
   };
   // which defense track key (if any) mitigates this event's frequency and severity
   defense_track_key: string | null;
@@ -112,6 +133,12 @@ export interface BoardItemTemplate {
   description_template: string;
   // If present, this decision can only appear while one of these campaign types is active.
   campaign_type_keys?: string[];
+  // If present, this decision can only appear for a client with a matching completed catalog release.
+  requires_catalog_release_kind?: ('album' | 'single' | 'mixtape')[];
+  // If present, at least one roster client must have an active contract with this exclusivity_scope.
+  requires_active_scope?: string;
+  // If true, fires at most once per run — permanently filtered out after its first appearance.
+  one_time?: boolean;
   // minimum Reputation for this item to appear in the generation pool
   rep_gate: number;
   // arc stages of the client that allow this item to be generated
@@ -136,13 +163,13 @@ export interface EconomyConfig {
   agent_stat_upgrade_cost: { money: number; reputation: number };
   roster_slot_upgrade_cost: { money: number };
   defense_track_upgrade_cost: { money: number; per_turn_recurring: number };
-  // "comfortable" entity per_month income for a peak-arc client; scaled by arc income multiplier for other stages
+  // "comfortable" entity per_week income for a peak-arc client; scaled by arc income multiplier for other stages
   income_satisfaction_threshold: number;
 }
 
 // §5.1.9 — arc tuning
 export interface ArcConfig {
-  // base turns before the arc stage advances; Form accelerates or delays this
+  // base weeks before the arc stage advances; Form accelerates or delays this
   rising_to_peak_base_turns: number;
   peak_to_declining_base_turns: number;
   // multipliers applied to true stat values and income at each stage
@@ -152,6 +179,28 @@ export interface ArcConfig {
     marketability: number;
     income: number;
   }>;
+}
+
+// §5.1.4b — two-card campaign category system (optional; variants without this fall back to flat list)
+
+export interface CampaignCategoryConditions {
+  has_label?: boolean;
+  min_audience?: number;
+  min_turns?: number;
+  max_turns?: number;
+  valid_arc_stages?: ArcStage[];
+}
+
+export interface CampaignRoutingRule {
+  type_key: string;
+  conditions: CampaignCategoryConditions;
+  size_names: Record<CampaignSize, string>;
+}
+
+export interface CampaignCategoryDefinition {
+  category: string;
+  display_label: string;
+  routing_rules: CampaignRoutingRule[];
 }
 
 // Root manifest — every variant must export a value satisfying this shape
@@ -171,4 +220,8 @@ export interface VariantManifest {
 
   economy: EconomyConfig;
   arc: ArcConfig;
+  // Minimum budget floor per campaign size. Defaults to 500 for any size not specified.
+  budget_floors?: Partial<Record<CampaignSize, number>>;
+  // When present, the Campaign tab shows two category cards instead of a flat type list.
+  campaign_categories?: CampaignCategoryDefinition[];
 }

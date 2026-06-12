@@ -1,43 +1,22 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { CoreStatKey } from '../types/primitives';
 import { FoggedStat } from '../types/client';
 import { FogBand } from './FogBand';
-import { Colors, FontSize, Spacing, Radius } from '../theme';
+import { Spacing } from '../theme';
 
 export interface StatRowProps {
   statKey: CoreStatKey;
   label: string;
   stat: FoggedStat;
-  onInvest?: (statKey: CoreStatKey, amount: number) => void;
-  canInvest?: boolean;
-  scoutMaxed?: boolean;
 }
 
-const INVEST_AMOUNT = 500;
-
-export function StatRow({ statKey, label, stat, onInvest, canInvest, scoutMaxed }: StatRowProps) {
-  const disabled = !canInvest || scoutMaxed;
+export function StatRow({ label, stat }: StatRowProps) {
   return (
     <View style={styles.row}>
       <View style={styles.band}>
-        <FogBand label={label} stat={stat} size="full" showInvested />
+        <FogBand label={label} stat={stat} size="full" />
       </View>
-      {onInvest && (
-        <TouchableOpacity
-          style={[styles.btn, disabled && styles.btnDisabled]}
-          onPress={() => onInvest(statKey, INVEST_AMOUNT)}
-          disabled={disabled}
-          accessibilityLabel={`Invest ${INVEST_AMOUNT} in ${label}`}
-        >
-          <Text style={[styles.btnText, disabled && styles.btnTextDisabled]}>
-            {scoutMaxed ? 'Max' : 'Invest'}
-          </Text>
-          <Text style={[styles.btnSub, disabled && styles.btnTextDisabled]}>
-            ${INVEST_AMOUNT}
-          </Text>
-        </TouchableOpacity>
-      )}
     </View>
   );
 }
@@ -50,31 +29,5 @@ const styles = StyleSheet.create({
   },
   band: {
     flex: 1,
-  },
-  btn: {
-    backgroundColor: Colors.accent,
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    alignItems: 'center',
-    minWidth: 64,
-  },
-  btnDisabled: {
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  btnText: {
-    color: Colors.textPrimary,
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-  },
-  btnSub: {
-    color: Colors.textPrimary,
-    fontSize: FontSize.xs,
-    opacity: 0.8,
-  },
-  btnTextDisabled: {
-    color: Colors.textDim,
   },
 });

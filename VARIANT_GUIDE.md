@@ -69,13 +69,13 @@ The validator throws if any group's weights don't sum to 1.0 within ±0.01.
 
 ```typescript
 entity_types: [
-  { key: 'studio',    label: 'Film Studio',    valid_payout_types: ['per_month'] },
+  { key: 'studio',    label: 'Film Studio',    valid_payout_types: ['per_week'] },
   { key: 'streaming', label: 'Streamer',       valid_payout_types: ['per_objective'] },
   { key: 'brand',     label: 'Sponsor',        valid_payout_types: ['lump_sum'] },
 ],
 ```
 
-Valid payout types: `per_month`, `lump_sum`, `per_objective`.
+Valid payout types: `per_week`, `lump_sum`, `per_objective`.
 
 ### 5. Write events with real outcomes
 
@@ -115,7 +115,7 @@ figure per turn in practice.
   form_weight:  0.75,   // 0–1; how much form drives the installment roll
   variance:     12,     // std deviation of random component
   base_payout:  3_000,  // agent's per-turn cut at 100% form
-  payout_type:  'per_month',
+  payout_type:  'per_week',
   per_installment_stat_deltas: { morale: -1 },
   event_trigger_threshold: 30,   // roll below this → client event fires
   trait_trigger_threshold: 88,   // roll above this → trait grant check
@@ -167,9 +167,9 @@ empty in the early game when no clients are on the roster:
 
 | Field | Notes |
 |---|---|
-| `starting_money` | Should give ~10 turns of runway before income starts |
+| `starting_money` | Should give ~10 weeks of runway before income starts |
 | `overhead_per_turn` | Keep below `starting_money / 10` |
-| `career_length` | 48–72 turns feels right for a session |
+| `career_length` | 48–72 weeks feels right for a session |
 | `event_base_rate` | 0.12–0.20; higher = more chaotic |
 
 ### 11. Register the manifest
@@ -227,7 +227,7 @@ Fix any throws, then the variant is ready to play.
 ## What NOT to change
 
 - The four core stat keys (`talent`, `form`, `marketability`, `morale`)
-- The four arc stages (`rising`, `peak`, `declining`) — only their threshold turns change
+- The four arc stages (`rising`, `peak`, `declining`) — only their threshold weeks change
 - The four defense track keys (`insurance`, `pr`, `legal`, `medical`)
 - The turn phase order (turn_open → upkeep → decision → resolution → turn_close)
 - The `GameEvent`, `Contract`, `Campaign`, `DecisionItem` runtime types

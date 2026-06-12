@@ -2,15 +2,17 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { NewsItem, NewsItemType } from '../types/run';
 import { Colors, FontSize, Spacing } from '../theme';
-import { formatMoney, formatDelta } from '../theme';
+import { DeltaText } from './DeltaText';
 
 export interface NewsItemRowProps {
   item: NewsItem;
   clientName?: string;
+  reputationLabel?: string;
 }
 
 export const NEWS_ITEM_ICONS: Record<NewsItemType, string> = {
   campaign_installment: '★',
+  campaign_ended:       '✔',
   income_received:      '$',
   client_milestone:     '◆',
   event_fired:          '!',
@@ -20,12 +22,13 @@ export const NEWS_ITEM_ICONS: Record<NewsItemType, string> = {
   debt_repayment:       '$',
   debt_missed:          '!',
   debt_recovered:       '$',
+  agency_spend:         '$',
   upkeep_summary:       '↻',
 };
 
-export function NewsItemRow({ item, clientName }: NewsItemRowProps) {
+export function NewsItemRow({ item, clientName, reputationLabel = 'Reputation' }: NewsItemRowProps) {
   const icon = NEWS_ITEM_ICONS[item.type];
-  const hasDelta = item.money_delta !== null || item.reputation_delta !== null;
+  const hasDelta = item.money_delta !== null || item.reputation_delta !== null || item.fan_delta !== null;
 
   return (
     <View style={styles.row}>
@@ -40,19 +43,18 @@ export function NewsItemRow({ item, clientName }: NewsItemRowProps) {
         {hasDelta && (
           <View style={styles.deltas}>
             {item.money_delta !== null && item.money_delta !== 0 && (
-              <Text style={[styles.delta, item.money_delta < 0 ? styles.negative : styles.positive]}>
-                {formatMoney(item.money_delta)}
-              </Text>
+              <DeltaText value={item.money_delta} kind="money" style={styles.delta} />
             )}
             {item.reputation_delta !== null && item.reputation_delta !== 0 && (
-              <Text style={[styles.delta, item.reputation_delta < 0 ? styles.negative : styles.positive]}>
-                {formatDelta(item.reputation_delta)} rep
-              </Text>
+              <DeltaText value={item.reputation_delta} label={reputationLabel} style={styles.delta} />
+            )}
+            {item.fan_delta !== null && item.fan_delta !== 0 && (
+              <DeltaText value={item.fan_delta} label="fans" style={styles.delta} />
             )}
           </View>
         )}
       </View>
-      <Text style={styles.turn}>T{item.turn_number}</Text>
+      <Text style={styles.turn}>W{item.turn_number}</Text>
     </View>
   );
 }
@@ -97,12 +99,6 @@ const styles = StyleSheet.create({
   delta: {
     fontSize: FontSize.xs,
     fontWeight: '600',
-  },
-  positive: {
-    color: Colors.positive,
-  },
-  negative: {
-    color: Colors.negative,
   },
   turn: {
     color: Colors.textDim,

@@ -1,22 +1,40 @@
 import { Client, ClientStats, FoggedStat, Prospect } from '../types/client';
+import { pickPortrait } from '../portraits';
 import { AgentState } from '../types/agent';
 import { ArcStage, CoreStatKey, StatDeltas } from '../types/primitives';
 import { RunState } from '../types/run';
 import { VariantManifest } from '../types/manifest';
+import { CampaignHistoryItem, CatalogRelease, ReleaseSong } from '../types/campaign';
 
 // INVARIANTS (PRD §3.2):
 // - Every stat has a true_value the engine knows and an observed [min, max] the player sees.
 // - Talent has two distinct values: true_value (current, dynamic) and max_potential (fixed hidden ceiling).
 // - Talent grows toward max_potential during rising/peak and decays during declining.
-// - Talent can NEVER be perfectly known (FOG_FLOOR_HARD enforced).
+// - Talent can reach perfect knowledge at sufficient scouting investment and tenure.
 // - Three fog-narrowing sources: agent scouting skills, per-prospect spend, roster tenure.
 
-export const FOG_FLOOR_HARD = 3;   // Talent band half-width floor (±3 → 6-wide minimum)
-export const FOG_FLOOR_SOFT = 1;   // Form/Morale/Marketability half-width floor
+export const FOG_FLOOR_HARD = 0;   // Talent band half-width floor (0 → can reach perfect knowledge)
+export const FOG_FLOOR_SOFT = 0;   // Soft stat half-width floor (0 → can reach perfect knowledge)
+export const SIGNING_FOG_BOOST = 200; // scouting_invested credited to all stats at signing
+export const WEEKS_PER_YEAR = 52;
+export const PROSPECT_LIFESPAN = 10;  // turns a prospect stays in the pool before expiring
+
+const ARC_AGE_RANGES_YEARS: Record<ArcStage, [number, number]> = {
+  rising:    [16, 24],
+  peak:      [24, 32],
+  declining: [32, 42],
+};
 
 // Initial half-band widths before any scouting (placeholder for open question §6.2)
-const INITIAL_HALF_BAND_HARD = 35;
+const INITIAL_HALF_BAND_HARD = 32;
 const INITIAL_HALF_BAND_SOFT = 40;
+
+export function ageWeeksForArcStage(stage: ArcStage): number {
+  const [min, max] = ARC_AGE_RANGES_YEARS[stage];
+  const minWeeks = min * WEEKS_PER_YEAR;
+  const maxWeeks = max * WEEKS_PER_YEAR - 1;
+  return minWeeks + Math.floor(Math.random() * Math.max(1, maxWeeks - minWeeks + 1));
+}
 
 const scoutingBuildingLevel = (agentState: AgentState, statKey: CoreStatKey): number => {
   const key =
@@ -194,6 +212,24 @@ export const applyTalentGrowthDecay: ApplyTalentGrowthDecay = (client, agentStat
   };
 };
 
+// ─── Audience decay ───────────────────────────────────────────────────────────
+
+// Passive per-turn loss — artists fade without active campaigns.
+// Rates are stage-weighted: rising artists build slowly, declining artists shed fans faster.
+export const AUDIENCE_DECAY_RATE: Record<ArcStage, number> = {
+  rising:    0.001, // 0.1 % per turn
+  peak:      0.003, // 0.3 % per turn
+  declining: 0.005, // 0.5 % per turn
+};
+
+export type ApplyAudienceDecay = (client: Client) => Client;
+
+export const applyAudienceDecay: ApplyAudienceDecay = (client) => {
+  const loss = Math.round(client.audience * AUDIENCE_DECAY_RATE[client.arc_stage]);
+  if (loss <= 0) return client;
+  return { ...client, audience: Math.max(0, client.audience - loss) };
+};
+
 // ─── Arc progression ──────────────────────────────────────────────────────────
 
 export type EvaluateArcProgression = (client: Client, manifest: VariantManifest) => ArcStage;
@@ -343,16 +379,27 @@ export function computeProspectPoolSize(reputation: number): number {
   return 3;
 }
 
-export function generateProspects(count: number, usedNames: Set<string>, reputation = 50): Prospect[] {
+export function generateProspects(
+  count: number,
+  usedNames: Set<string>,
+  reputation = 50,
+  turnNumber = 1,
+  statScouting = 0,
+  insightScouting = 0,
+): Prospect[] {
   const available = PROSPECT_NAMES.filter(n => !usedNames.has(n));
   const result: Prospect[] = [];
   const shuffled = [...available].sort(() => Math.random() - 0.5);
 
   for (let i = 0; i < Math.min(count, shuffled.length); i++) {
-    const prestigeBonus = Math.floor(Math.max(0, Math.min(100, reputation)) / 10);
+    // Quality ceiling grows with turn progression, reputation, and scouting skill.
+    // Better scouts find higher-ceiling prospects that lower-skill agents simply miss.
+    const turnProgressBonus = Math.min(30, Math.floor(turnNumber / 2));
+    const repBonus          = Math.floor(Math.max(0, Math.min(100, reputation)) / 10);
+    const scoutingBonus     = Math.min(15, statScouting + insightScouting);
     const tv = (): number => {
-      const min = 15 + Math.floor(prestigeBonus / 2);
-      const max = 55 + prestigeBonus;
+      const min = 10;
+      const max = 28 + turnProgressBonus + repBonus + scoutingBonus;
       return min + Math.floor(Math.random() * Math.max(1, max - min));
     };
     const fogged = (trueValue: number, isHard: boolean): FoggedStat => {
@@ -365,12 +412,16 @@ export function generateProspects(count: number, usedNames: Set<string>, reputat
       };
     };
     const marketability = tv();
-    const audience = Math.max(500, Math.round((marketability * 120) + (reputation * 80) + Math.random() * 3_000));
+    const audience = Math.max(50, Math.round((marketability * 18) + (reputation * 12) + Math.random() * 600));
     const startingTalent = tv();
     const maxPotential = Math.min(100, startingTalent + 5 + Math.floor(Math.random() * 36));
+    const { key: portrait, gender } = pickPortrait();
     result.push({
       id:              `prospect_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}_${i}`,
       name:            shuffled[i],
+      gender,
+      portrait,
+      age_weeks:       ageWeeksForArcStage('rising'),
       arc_stage:       'rising',
       audience,
       stats: {
@@ -379,11 +430,246 @@ export function generateProspects(count: number, usedNames: Set<string>, reputat
         marketability: fogged(marketability, false),
         morale:        fogged(65 + Math.floor(Math.random() * 25), false),
       },
-      scouting_invested: 0,
-      max_potential:   maxPotential,
+      scouting_invested:        0,
+      max_potential:            maxPotential,
+      expires_in:               PROSPECT_LIFESPAN,
+      generated_at_reputation:  reputation,
     });
   }
   return result;
+}
+
+// ─── Pre-signing history ──────────────────────────────────────────────────────
+
+// Artists with a meaningful existing audience had a career before you signed them.
+// Generate plausible past campaign history and catalog entries at sign time so the
+// client detail screen is not empty for artists who clearly weren't born yesterday.
+
+const PRE_HISTORY_SONG_TITLES = [
+  'Late Night Drive', 'Neon Signs', 'Fade Away', 'Run It Back', 'Ghost Town',
+  'Broken Clocks', 'Paper Planes', 'Summer Rain', 'Midnight Call', 'Low Key',
+  'Still Standing', 'Wired', 'Control', 'Burning Up', 'Glass', 'Static',
+  'Free', 'Heavy', 'Spark', 'Open Road', 'No Signal', 'Colors', 'Waiting',
+];
+
+const PRE_HISTORY_RELEASE_TITLES = [
+  'Arrival', 'First Steps', 'Raw', 'Unfiltered', 'The Beginning',
+  'Chapter One', 'Demo Tape', 'Ground Level', 'Static', 'Open Season',
+  'Humble Beginnings', 'Street Level', 'The Come Up', 'Rough Draft', 'Zero',
+  'Before Everything', 'Draft One', 'Foundations', 'Early Work', 'Volume 1',
+];
+
+function histId(): string {
+  return Math.random().toString(36).substring(2, 10);
+}
+
+function pickRandom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function pickRandomUnique<T>(arr: T[], exclude: Set<T>): T {
+  const filtered = arr.filter(v => !exclude.has(v));
+  return filtered.length > 0 ? pickRandom(filtered) : pickRandom(arr);
+}
+
+function generatePreSigningHistory(
+  prospect: Prospect,
+  manifest: VariantManifest,
+): { campaign_history: CampaignHistoryItem[]; catalog_releases: CatalogRelease[] } {
+  const { audience } = prospect;
+
+  // Tier boundaries tuned to the typical prospect audience range (~780–2200 fans).
+  //   < 900  → truly new, no pre-existing record
+  //   900–1400 → done some local gigs
+  //   1400–1900 → gigs + a mixtape/short release
+  //   ≥ 1900 → gigs + single + mixtape (more complete early career)
+  if (audience < 900) return { campaign_history: [], catalog_releases: [] };
+
+  const gigType = manifest.campaign_types.find(
+    ct => !ct.release_kind && ct.valid_arc_stages.includes('rising'),
+  );
+  // Prefer a longer-form release (mixtape), fall back to any release type
+  const tapeType = manifest.campaign_types.find(
+    ct => ct.release_kind && ct.release_kind !== 'album' && ct.total_turns >= 3 && ct.valid_arc_stages.includes('rising'),
+  );
+  // Prefer a short release (single) that is different from tapeType
+  const singleType = manifest.campaign_types.find(
+    ct => ct.release_kind && ct.release_kind !== 'album' && ct.total_turns <= 2 && ct.valid_arc_stages.includes('rising') && ct !== tapeType,
+  );
+
+  if (!gigType) return { campaign_history: [], catalog_releases: [] };
+
+  const tier = audience < 1400 ? 1 : audience < 1900 ? 2 : 3;
+  const campaign_history: CampaignHistoryItem[] = [];
+  const catalog_releases: CatalogRelease[] = [];
+  const usedTitles = new Set<string>();
+
+  // Earliest to latest; turn offsets are negative (before game start).
+  // Tape completed at -3, single at -7, gigs at -12 / -8 / -4.
+  const gigEnd   = tier === 3 ? -12 : tier === 2 ? -8 : -4;
+  const singleEnd = -7;
+  const tapeEnd   = -3;
+
+  // ── Gig campaign ──────────────────────────────────────────────────────────
+  const gigFanDelta = 80 + Math.floor(Math.random() * 180);
+  const gigMoney    = Math.floor(gigType.base_payout * gigType.total_turns * (0.4 + Math.random() * 0.4));
+  const gigCampId   = histId();
+  campaign_history.push({
+    id:           gigCampId,
+    type_key:     gigType.key,
+    label:        gigType.label,
+    started_turn: gigEnd - gigType.total_turns,
+    completed_turn: gigEnd,
+    total_turns:  gigType.total_turns,
+    setup: {
+      size: 'small',
+      length: gigType.total_turns,
+      budget: Math.floor(gigType.base_payout * 0.5),
+      payout_multiplier: 0.8,
+      audience_multiplier: 0.8,
+      event_risk_multiplier: 1.0,
+    },
+    installment_results: [],
+    release_id:   null,
+    summary: {
+      money_delta:      gigMoney,
+      reputation_delta: 0,
+      fan_delta:        gigFanDelta,
+    },
+    visible_notes: [],
+  });
+
+  // ── Single release (tier 3 only) ──────────────────────────────────────────
+  if (tier >= 3 && singleType) {
+    const singleFanDelta = 150 + Math.floor(Math.random() * 200);
+    const singleStreams   = singleFanDelta * 70 + Math.floor(Math.random() * 20_000);
+    const singleIncome    = Math.floor(singleStreams * 0.004);
+    const singleCampId    = histId();
+    const singleRelId     = histId();
+    const singleTitle     = pickRandomUnique(PRE_HISTORY_SONG_TITLES, usedTitles);
+    usedTitles.add(singleTitle);
+
+    campaign_history.push({
+      id:           singleCampId,
+      type_key:     singleType.key,
+      label:        singleType.label,
+      started_turn: singleEnd - singleType.total_turns,
+      completed_turn: singleEnd,
+      total_turns:  singleType.total_turns,
+      setup: {
+        size: 'small',
+        length: singleType.total_turns,
+        budget: Math.floor(singleType.base_payout * 0.5),
+        payout_multiplier: 0.8,
+        audience_multiplier: 0.8,
+        event_risk_multiplier: 1.0,
+      },
+      installment_results: [],
+      release_id:   singleRelId,
+      summary: {
+        money_delta:      singleIncome,
+        reputation_delta: 0,
+        fan_delta:        singleFanDelta,
+        streams:          singleStreams,
+        stream_income:    singleIncome,
+      },
+      visible_notes: [],
+    });
+
+    catalog_releases.push({
+      id:                    singleRelId,
+      campaign_id:           singleCampId,
+      kind:                  singleType.release_kind!,
+      type_key:              singleType.key,
+      title:                 singleTitle,
+      songs: [{
+        id:      histId(),
+        title:   singleTitle,
+        quality: 35 + Math.floor(Math.random() * 35),
+      }] as ReleaseSong[],
+      released_turn:         singleEnd,
+      turns_since_release:   Math.abs(singleEnd),
+      album_units_sold:      0,
+      total_streams:         singleStreams,
+      album_income_total:    0,
+      stream_income_total:   singleIncome,
+      latest_turn_album_units: 0,
+      latest_turn_streams:   Math.floor(singleStreams * 0.04),
+      latest_turn_income:    Math.floor(singleStreams * 0.04 * 0.004),
+      latest_turn_fan_gain:  1 + Math.floor(Math.random() * 3),
+      total_fan_gain:        singleFanDelta,
+      is_selling_albums:     false,
+    });
+  }
+
+  // ── Mixtape / short release (tier 2+) ─────────────────────────────────────
+  if (tier >= 2 && tapeType) {
+    const tapeFanDelta  = 300 + Math.floor(Math.random() * 400);
+    const tapeStreams    = tapeFanDelta * 80 + Math.floor(Math.random() * 60_000);
+    const tapeIncome    = Math.floor(tapeStreams * 0.004);
+    const tapeCampId    = histId();
+    const tapeRelId     = histId();
+    const tapeTitle     = pickRandomUnique(PRE_HISTORY_RELEASE_TITLES, usedTitles);
+    usedTitles.add(tapeTitle);
+
+    const songCount = 4 + Math.floor(Math.random() * 4);
+    const songs: ReleaseSong[] = Array.from({ length: songCount }, () => ({
+      id:      histId(),
+      title:   pickRandomUnique(PRE_HISTORY_SONG_TITLES, usedTitles),
+      quality: 30 + Math.floor(Math.random() * 45),
+    }));
+    songs.forEach(s => usedTitles.add(s.title));
+
+    campaign_history.push({
+      id:           tapeCampId,
+      type_key:     tapeType.key,
+      label:        tapeType.label,
+      started_turn: tapeEnd - tapeType.total_turns,
+      completed_turn: tapeEnd,
+      total_turns:  tapeType.total_turns,
+      setup: {
+        size: 'small',
+        length: tapeType.total_turns,
+        budget: Math.floor(tapeType.base_payout * 0.5),
+        payout_multiplier: 0.8,
+        audience_multiplier: 0.9,
+        event_risk_multiplier: 1.0,
+      },
+      installment_results: [],
+      release_id:   tapeRelId,
+      summary: {
+        money_delta:      tapeIncome,
+        reputation_delta: 0,
+        fan_delta:        tapeFanDelta,
+        streams:          tapeStreams,
+        stream_income:    tapeIncome,
+      },
+      visible_notes: [],
+    });
+
+    catalog_releases.push({
+      id:                    tapeRelId,
+      campaign_id:           tapeCampId,
+      kind:                  tapeType.release_kind!,
+      type_key:              tapeType.key,
+      title:                 tapeTitle,
+      songs,
+      released_turn:         tapeEnd,
+      turns_since_release:   Math.abs(tapeEnd),
+      album_units_sold:      0,
+      total_streams:         tapeStreams,
+      album_income_total:    0,
+      stream_income_total:   tapeIncome,
+      latest_turn_album_units: 0,
+      latest_turn_streams:   Math.floor(tapeStreams * 0.025),
+      latest_turn_income:    Math.floor(tapeStreams * 0.025 * 0.004),
+      latest_turn_fan_gain:  2 + Math.floor(Math.random() * 5),
+      total_fan_gain:        tapeFanDelta,
+      is_selling_albums:     false,
+    });
+  }
+
+  return { campaign_history, catalog_releases };
 }
 
 // ─── Roster operations ────────────────────────────────────────────────────────
@@ -393,26 +679,38 @@ export type SignClient = (
   prospectId: string,
   contractId: string,
   agentState: AgentState,
+  manifest: VariantManifest,
 ) => RunState;
 
-export const signClient: SignClient = (state, prospectId, contractId, agentState) => {
+export const signClient: SignClient = (state, prospectId, contractId, agentState, manifest) => {
   const prospect = state.prospects.find(p => p.id === prospectId);
   if (!prospect) return state;
+
+  const signingBoostKeys: CoreStatKey[] = ['talent', 'form', 'marketability', 'morale'];
+  const boostedStats = { ...prospect.stats };
+  for (const key of signingBoostKeys) {
+    boostedStats[key] = { ...boostedStats[key], scouting_invested: SIGNING_FOG_BOOST };
+  }
+
+  const { campaign_history, catalog_releases } = generatePreSigningHistory(prospect, manifest);
 
   const newClient: Client = {
     id:               prospect.id,
     name:             prospect.name,
+    gender:           prospect.gender,
+    portrait:         prospect.portrait,
     arc_stage:        prospect.arc_stage,
     audience:         prospect.audience,
     max_potential:    prospect.max_potential,
-    stats:            refreshClientFog({ ...prospect, traits: [], turns_on_roster: 0, turns_at_stage: 0, active_campaign_id: null, campaign_history: [], catalog_releases: [], agent_contract_id: contractId, max_potential: prospect.max_potential, decision_option_counts: {} } as Client, agentState),
+    stats:            refreshClientFog({ ...prospect, stats: boostedStats, traits: [], turns_on_roster: 0, turns_at_stage: 0, active_campaign_id: null, campaign_history: [], catalog_releases: [], agent_contract_id: contractId, max_potential: prospect.max_potential, decision_option_counts: {} } as Client, agentState),
+    age_weeks:        prospect.age_weeks,
     traits:           [],
     decision_option_counts: {},
     turns_on_roster:  0,
     turns_at_stage:   0,
     active_campaign_id: null,
-    campaign_history: [],
-    catalog_releases: [],
+    campaign_history,
+    catalog_releases,
     agent_contract_id: contractId,
   };
 
@@ -442,7 +740,7 @@ export const releaseClient: ReleaseClient = (state, clientId, manifest) => {
 
   let s = state;
 
-  // Active contract → severance (2 months of obligations) + rep hit
+  // Active contract → severance (2 weeks of obligations) + rep hit
   if (agentContract && agentContract.duration_remaining > 0) {
     const severance = agentContract.obligations_per_turn * 2;
     s = {
@@ -455,6 +753,7 @@ export const releaseClient: ReleaseClient = (state, clientId, manifest) => {
   return {
     ...s,
     roster:    s.roster.filter(c => c.id !== clientId),
+    campaigns: s.campaigns.filter(c => c.client_id !== clientId),
     contracts: s.contracts.map(c =>
       c.id === client.agent_contract_id ? { ...c, duration_remaining: 0 } : c,
     ),

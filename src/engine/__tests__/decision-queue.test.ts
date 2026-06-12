@@ -9,19 +9,24 @@ import {
   generateContractRenewalOffers,
   BOARD_MIN_ITEMS,
   BOARD_MAX_ITEMS,
+  EARLY_BOARD_MAX_ITEMS,
   RENEWAL_NOTICE_TURNS,
   RENEWAL_MORALE_THRESHOLD,
+  computeDecisionBoardTargetCount,
   computeCounterAggressiveness,
   computeCounterAcceptanceProbability,
   applyCounterTerms,
   resolveCounteroffer,
+  queueContractRenewalOffer,
   FOG_HALF_BASE,
   COUNTER_REVISED_WINDOW,
+  injectAlbumOptionDecision,
 } from '../decision-queue';
 import { makeRunState, makeClient, makeContract, makeManifest, makeClientStats, makeAgentState, nextId } from './fixtures';
 import { DecisionItem, DecisionOutcome, PushRisk } from '../../types/decision';
 import { ContractDraft, CounterTerms } from '../../types/contract';
 import { ContractTemplate } from '../../types/contract';
+import { Campaign, CatalogRelease } from '../../types/campaign';
 
 const makeOutcome = (overrides?: Partial<DecisionOutcome>): DecisionOutcome => ({
   money_delta: 0,
@@ -55,7 +60,7 @@ const makeContractDraft = (overrides?: Partial<ContractDraft>): ContractDraft =>
   tier: 'agent_client',
   client_id: nextId(),
   entity_id: null,
-  payout_type: 'per_month',
+  payout_type: 'per_week',
   your_cut: 15,
   amount: 10_000,
   duration: 12,
@@ -65,6 +70,48 @@ const makeContractDraft = (overrides?: Partial<ContractDraft>): ContractDraft =>
   default_on_ignore: 'reject',
   expires_in: null,
   exclusivity_scope: null,
+  album_option: null,
+  ...overrides,
+});
+
+const makeReleaseCampaign = (overrides?: Partial<Campaign>): Campaign => ({
+  id: `cmp_${nextId()}`,
+  client_id: nextId(),
+  type_key: 'album_cycle',
+  release_plan: {
+    kind: 'album',
+    title: 'Test Album',
+    songs: [
+      { id: 'song_1', title: 'Track 1', quality: 70 },
+      { id: 'song_2', title: 'Track 2', quality: 96 },
+    ],
+  },
+  total_turns: 4,
+  turns_remaining: 2,
+  installment_results: [],
+  pending_objective_ids: [],
+  ...overrides,
+});
+
+const makeAlbumRelease = (overrides?: Partial<CatalogRelease>): CatalogRelease => ({
+  id: `rel_${nextId()}`,
+  campaign_id: `cmp_${nextId()}`,
+  kind: 'album',
+  type_key: 'album_cycle',
+  title: 'Test Album',
+  songs: [{ id: 'song_1', title: 'Track 1', quality: 70 }],
+  released_turn: 12,
+  turns_since_release: 0,
+  album_units_sold: 0,
+  total_streams: 0,
+  album_income_total: 0,
+  stream_income_total: 0,
+  latest_turn_album_units: 0,
+  latest_turn_streams: 0,
+  latest_turn_income: 0,
+  latest_turn_fan_gain: 0,
+  total_fan_gain: 0,
+  is_selling_albums: true,
   ...overrides,
 });
 
@@ -162,6 +209,112 @@ describe('decision-queue — resolveDecisionItem', () => {
     expect(result.contracts).toHaveLength(1);
   });
 
+  it('blocks a new label deal when the client is already under an active label contract', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId });
+    const existingLabel = makeContract({
+      client_id: clientId,
+      tier: 'client_entity',
+      entity_id: 'label_old',
+      exclusivity_scope: 'label',
+      duration_remaining: 6,
+    });
+    const draft = makeContractDraft({
+      tier: 'client_entity',
+      client_id: clientId,
+      entity_id: 'label_new',
+      your_cut: null,
+      exclusivity_scope: 'label',
+    });
+    const item = makeDecisionItem({ client_id: clientId, contract_draft: draft });
+    const state = makeRunState({ roster: [client], contracts: [existingLabel], decision_board: [item] });
+
+    const result = resolveDecisionItem(state, item.id, 'approve', makeManifest());
+
+    expect(result.decision_board[0].resolved_result_label).toBe('Withdrawn');
+    expect(result.decision_board[0].resolved_result_description).toContain('already under an exclusive label contract');
+    // Existing label contract must not be cancelled
+    expect(result.contracts.find(c => c.id === existingLabel.id)?.duration_remaining).toBe(6);
+    // No new contract activated
+    expect(result.contracts).toHaveLength(1);
+  });
+
+  it('allows a label renewal even when an active label contract exists', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId });
+    const currentLabel = makeContract({
+      client_id: clientId,
+      tier: 'client_entity',
+      entity_id: 'label_current',
+      exclusivity_scope: 'label',
+      duration_remaining: 2,
+    });
+    const renewalDraft = makeContractDraft({
+      tier: 'client_entity',
+      client_id: clientId,
+      entity_id: 'label_current',
+      your_cut: null,
+      exclusivity_scope: 'label',
+    });
+    const item = makeDecisionItem({
+      type: 'renewal',
+      client_id: clientId,
+      contract_id: currentLabel.id,
+      contract_draft: renewalDraft,
+    });
+    const state = makeRunState({ roster: [client], contracts: [currentLabel], decision_board: [item] });
+
+    const result = resolveDecisionItem(state, item.id, 'approve', makeManifest());
+
+    expect(result.decision_board[0].resolved_result_label).not.toBe('Withdrawn');
+    // Renewal activates a new contract
+    expect(result.contracts.length).toBeGreaterThan(0);
+  });
+
+  it('accepting a renewal expires the current contract and activates the renewed term', () => {
+    const clientId = nextId();
+    const currentContract = makeContract({
+      client_id: clientId,
+      tier: 'agent_client',
+      amount: 12_000,
+      your_cut: 18,
+      obligations_per_turn: 450,
+      duration_remaining: 1,
+    });
+    const client = makeClient({ id: clientId, agent_contract_id: currentContract.id });
+    const draft = makeContractDraft({
+      tier: 'agent_client',
+      client_id: clientId,
+      amount: 12_000,
+      your_cut: 18,
+      obligations_per_turn: 450,
+      duration: 10,
+    });
+    const item = makeDecisionItem({
+      type: 'renewal',
+      client_id: clientId,
+      contract_id: currentContract.id,
+      contract_draft: draft,
+    });
+    const state = makeRunState({
+      roster: [client],
+      contracts: [currentContract],
+      decision_board: [item],
+    });
+
+    const result = resolveDecisionItem(state, item.id, 'approve', makeManifest());
+    const expired = result.contracts.find(c => c.id === currentContract.id);
+    const renewed = result.contracts.find(c => c.id !== currentContract.id);
+
+    expect(expired?.duration_remaining).toBe(0);
+    expect(renewed?.amount).toBe(currentContract.amount);
+    expect(renewed?.duration_remaining).toBe(10);
+    expect(result.roster[0].agent_contract_id).toBe(renewed?.id);
+    expect(result.decision_board[0].resolved_result_description).toBe(
+      'Renewed. The current contract will be replaced by the new term.',
+    );
+  });
+
   it('records random decision branches on the board without adding news clutter', () => {
     jest.spyOn(Math, 'random').mockReturnValue(0.01);
     const clientId = nextId();
@@ -196,6 +349,128 @@ describe('decision-queue — resolveDecisionItem', () => {
     expect(result.decision_board[0].resolved_result_description).toBe('The denial drew more scrutiny.');
     expect(result.news_feed).toHaveLength(0);
     jest.restoreAllMocks();
+  });
+
+  it('applies album-generation choices to the pending release quality, not upfront catalog streams', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.99);
+    const clientId = nextId();
+    const campaign = makeReleaseCampaign({ client_id: clientId });
+    const client = makeClient({ id: clientId, audience: 10_000 });
+    const item = makeDecisionItem({
+      template_key: 'album_better_studio',
+      campaign_id: campaign.id,
+      client_id: clientId,
+      options: [
+        {
+          key: 'upgrade',
+          label: 'Upgrade the Studio',
+          outcome: makeOutcome({ money_delta: -3_000, stat_deltas: { form: 3, morale: 1 } }),
+          random_outcomes: [
+            {
+              key: 'no_benefit',
+              label: 'No Improvement',
+              description: 'The better studio didn\'t translate to better output.',
+              chance: 0.4,
+              marketability_modifier: 0,
+              outcome: makeOutcome({ money_delta: -3_000 }),
+            },
+          ],
+          push_risk: null,
+        },
+      ],
+    });
+    const state = makeRunState({ roster: [client], campaigns: [campaign], decision_board: [item] });
+    const result = resolveDecisionItem(state, item.id, 'upgrade', makeManifest());
+
+    expect(result.campaigns[0].release_plan?.songs.map(song => song.quality)).toEqual([78, 100]);
+    expect(result.roster[0].audience).toBe(10_000);
+    expect(result.roster[0].catalog_releases).toHaveLength(0);
+    jest.restoreAllMocks();
+  });
+
+  it('does not boost release quality when the album-generation random branch fails', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const campaign = makeReleaseCampaign({ client_id: clientId });
+    const client = makeClient({ id: clientId });
+    const item = makeDecisionItem({
+      template_key: 'album_better_studio',
+      campaign_id: campaign.id,
+      client_id: clientId,
+      options: [
+        {
+          key: 'upgrade',
+          label: 'Upgrade the Studio',
+          outcome: makeOutcome({ money_delta: -3_000, stat_deltas: { form: 3, morale: 1 } }),
+          random_outcomes: [
+            {
+              key: 'no_benefit',
+              label: 'No Improvement',
+              description: 'The better studio didn\'t translate to better output.',
+              chance: 0.4,
+              marketability_modifier: 0,
+              outcome: makeOutcome({ money_delta: -3_000 }),
+            },
+          ],
+          push_risk: null,
+        },
+      ],
+    });
+    const state = makeRunState({ roster: [client], campaigns: [campaign], decision_board: [item] });
+    const result = resolveDecisionItem(state, item.id, 'upgrade', makeManifest());
+
+    expect(result.campaigns[0].release_plan?.songs.map(song => song.quality)).toEqual([70, 96]);
+    expect(result.decision_board[0].resolved_result_label).toBe('No Improvement');
+    jest.restoreAllMocks();
+  });
+
+  it('grants a decision-triggered trait after repeatedly choosing the same scandal response', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId });
+    const manifest = makeManifest({
+      traits: [
+        {
+          key:                    'scandal_hardened',
+          label:                  'Scandal Hardened',
+          stat_modifiers:         { morale: 2 },
+          marketability_modifier: 0,
+          event_bias:             { market: 0.75 },
+          trigger_condition_key:  'decision_scandal_denial_go_quiet',
+          trigger_threshold:      0,
+          decision_trigger:       {
+            template_key:   'scandal_denial',
+            option_key:     'go_quiet',
+            required_count: 3,
+            probability:    1,
+          },
+        },
+      ],
+    });
+    const scandalItem = (id: string) => makeDecisionItem({
+      id,
+      template_key: 'scandal_denial',
+      client_id: clientId,
+      options: [
+        { key: 'go_quiet', label: 'Go Quiet', outcome: makeOutcome(), push_risk: null },
+      ],
+    });
+
+    let state = makeRunState({ roster: [client], decision_board: [scandalItem('itm_1')] });
+    state = resolveDecisionItem(state, 'itm_1', 'go_quiet', manifest);
+    state = { ...state, decision_board: [scandalItem('itm_2')] };
+    state = resolveDecisionItem(state, 'itm_2', 'go_quiet', manifest);
+    state = { ...state, decision_board: [scandalItem('itm_3')] };
+    const result = resolveDecisionItem(state, 'itm_3', 'go_quiet', manifest);
+
+    expect(result.roster[0].decision_option_counts['scandal_denial:go_quiet']).toBe(3);
+    expect(result.roster[0].traits).toEqual([
+      {
+        trait_id:               'scandal_hardened',
+        stat_modifiers:         { morale: 2 },
+        marketability_modifier: 0,
+        event_bias:             { market: 0.75 },
+      },
+    ]);
   });
 });
 
@@ -270,6 +545,98 @@ describe('decision-queue — activateContract', () => {
     const updatedClient = result.roster.find(c => c.id === clientId);
     expect(updatedClient?.agent_contract_id).toBe(result.contracts[0].id);
   });
+
+  it('expires existing active contracts for the same client and exclusivity scope', () => {
+    const clientId = nextId();
+    const oldLabel = makeContract({
+      client_id: clientId,
+      tier: 'client_entity',
+      entity_id: 'label_old',
+      exclusivity_scope: 'label',
+      duration_remaining: 8,
+    });
+    const oldSponsor = makeContract({
+      client_id: clientId,
+      tier: 'client_entity',
+      entity_id: 'sponsor_old',
+      exclusivity_scope: 'sponsor',
+      duration_remaining: 8,
+    });
+    const draft = makeContractDraft({
+      tier: 'client_entity',
+      client_id: clientId,
+      entity_id: 'label_new',
+      your_cut: null,
+      exclusivity_scope: 'label',
+    });
+    const state = makeRunState({ contracts: [oldLabel, oldSponsor] });
+
+    const result = activateContract(state, draft, makeManifest());
+
+    expect(result.contracts.find(c => c.id === oldLabel.id)?.duration_remaining).toBe(0);
+    expect(result.contracts.find(c => c.id === oldSponsor.id)?.duration_remaining).toBe(8);
+    expect(result.contracts[result.contracts.length - 1].duration_remaining).toBe(draft.duration);
+  });
+
+  it('does not add a prospect to the roster when already at capacity', () => {
+    const prospectId = nextId();
+    const prospect = {
+      id: prospectId,
+      name: 'Over-cap Prospect',
+      age_weeks: 20 * 52,
+      arc_stage: 'rising' as const,
+      audience: 5_000,
+      stats: makeClientStats(),
+      scouting_invested: 0,
+      max_potential: 80,
+      expires_in: 5,
+      generated_at_reputation: 0,
+    };
+    const draft = makeContractDraft({ tier: 'agent_client', client_id: prospectId });
+    const fullRoster = Array.from({ length: 3 }, () => makeClient());
+    const state = makeRunState({
+      prospects: [prospect],
+      roster: fullRoster,
+      agent: makeAgentState({ roster_capacity: 3 }),
+    });
+
+    const result = activateContract(state, draft, makeManifest());
+
+    expect(result.roster).toHaveLength(3);
+    expect(result.prospects).toHaveLength(1);
+  });
+
+  it('does not exceed roster capacity when two signing offers are approved back-to-back', () => {
+    const prospect1Id = nextId();
+    const prospect2Id = nextId();
+    const makeProspect = (id: string) => ({
+      id,
+      name: `Prospect ${id}`,
+      age_weeks: 20 * 52,
+      arc_stage: 'rising' as const,
+      audience: 5_000,
+      stats: makeClientStats(),
+      scouting_invested: 0,
+      max_potential: 80,
+      expires_in: 5,
+      generated_at_reputation: 0,
+    });
+    const draft1 = makeContractDraft({ tier: 'agent_client', client_id: prospect1Id });
+    const draft2 = makeContractDraft({ tier: 'agent_client', client_id: prospect2Id });
+    const item1 = makeDecisionItem({ client_id: prospect1Id, contract_draft: draft1 });
+    const item2 = makeDecisionItem({ client_id: prospect2Id, contract_draft: draft2 });
+    const state = makeRunState({
+      roster: [makeClient(), makeClient()],
+      prospects: [makeProspect(prospect1Id), makeProspect(prospect2Id)],
+      decision_board: [item1, item2],
+      agent: makeAgentState({ roster_capacity: 3 }),
+    });
+
+    const after1 = resolveDecisionItem(state, item1.id, 'approve', makeManifest());
+    const after2 = resolveDecisionItem(after1, item2.id, 'approve', makeManifest());
+
+    expect(after2.roster).toHaveLength(3);
+  });
 });
 
 // ─── tickBoardItemExpiry ──────────────────────────────────────────────────────
@@ -310,7 +677,7 @@ describe('decision-queue — tickBoardItemExpiry', () => {
 const makeContractTemplate = (overrides?: Partial<ContractTemplate>): ContractTemplate => ({
   key: 'test_signing',
   tier: 'agent_client',
-  payout_type: 'per_month',
+  payout_type: 'per_week',
   amount_range: [5_000, 15_000],
   duration_range: [6, 12],
   cut_range: [10, 20],
@@ -344,16 +711,16 @@ describe('decision-queue — hydrateContractOffer', () => {
     expect(result).toBeNull();
   });
 
-  it('generates a per_month draft with expected fields', () => {
+  it('generates a per_week draft with expected fields', () => {
     jest.spyOn(Math, 'random').mockReturnValue(0.5);
     const clientId = nextId();
     const client = makeClient({ id: clientId });
-    const template = makeContractTemplate({ payout_type: 'per_month' });
+    const template = makeContractTemplate({ payout_type: 'per_week' });
     const manifest = makeManifest({ contract_templates: [template] });
     const state = makeRunState({ roster: [client] });
     const draft = hydrateContractOffer(state, template.key, clientId, manifest);
     expect(draft).not.toBeNull();
-    expect(draft?.payout_type).toBe('per_month');
+    expect(draft?.payout_type).toBe('per_week');
     expect(draft?.tier).toBe('agent_client');
     expect(draft?.client_id).toBe(clientId);
     expect(typeof draft?.amount).toBe('number');
@@ -383,7 +750,7 @@ describe('decision-queue — hydrateContractOffer', () => {
     jest.spyOn(Math, 'random').mockReturnValue(0.5);
     const clientId = nextId();
     const client   = makeClient({ id: clientId });
-    const template = makeContractTemplate({ payout_type: 'per_month' });
+    const template = makeContractTemplate({ payout_type: 'per_week' });
     const manifest = makeManifest({ contract_templates: [template] });
     const state    = makeRunState({
       roster: [client],
@@ -399,11 +766,27 @@ describe('decision-queue — hydrateContractOffer', () => {
     jest.spyOn(Math, 'random').mockReturnValue(0.5);
     const clientId = nextId();
     const client   = makeClient({ id: clientId });
-    const template = makeContractTemplate({ tier: 'client_entity', payout_type: 'per_month', cut_range: null });
+    const template = makeContractTemplate({ tier: 'client_entity', payout_type: 'per_week', cut_range: null });
     const manifest = makeManifest({ contract_templates: [template] });
     const state    = makeRunState({ roster: [client] });
     const draft = hydrateContractOffer(state, template.key, clientId, manifest);
     expect(draft?.entity_id).not.toBeNull();
+  });
+
+  it('uses a named label counterparty for label contracts', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const clientId = nextId();
+    const client   = makeClient({ id: clientId });
+    const template = makeContractTemplate({
+      tier: 'client_entity',
+      payout_type: 'per_week',
+      cut_range: null,
+      exclusivity_scope: 'label',
+    });
+    const manifest = makeManifest({ contract_templates: [template] });
+    const state    = makeRunState({ roster: [client] });
+    const draft = hydrateContractOffer(state, template.key, clientId, manifest);
+    expect(draft?.entity_id).toBe('Blue Hour Records');
   });
 
   it('uses 8_000 and 5_000 payout fallbacks when amount rounds to 0 for per_objective', () => {
@@ -526,6 +909,45 @@ describe('decision-queue — generateDecisionBoard', () => {
     expect(board.length).toBeGreaterThan(0);
   });
 
+  it('filters out contract offers when client audience is below min_audience', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const contractTmpl = makeContractTemplate({
+      key: 'commission_test',
+      tier: 'client_entity',
+      payout_type: 'per_objective',
+      cut_range: null,
+      obligations_range: [0, 0],
+      rep_gate: 30,
+      valid_arc_stages: ['peak', 'declining'],
+      exclusivity_scope: 'commission',
+      min_audience: 50_000,
+    });
+    const boardTmpl = {
+      key: 'commission_board_item',
+      type: 'opportunity' as const,
+      description_template: 'A studio wants to commission {client_name}.',
+      rep_gate: 30,
+      valid_arc_stages: ['peak', 'declining'] as any[],
+      contract_template_key: 'commission_test',
+      default_on_ignore_key: 'pass',
+      expires_in: 3,
+    };
+    const manifest = makeManifest({ board_item_templates: [boardTmpl], contract_templates: [contractTmpl] });
+    const highStats = makeClientStats({ marketability: 75, form: 70, talent: 70 });
+
+    const belowThreshold = makeRunState({
+      reputation: 50,
+      roster: [makeClient({ arc_stage: 'peak', audience: 10_000, stats: highStats })],
+    });
+    expect(generateDecisionBoard(belowThreshold, manifest)).toHaveLength(0);
+
+    const aboveThreshold = makeRunState({
+      reputation: 50,
+      roster: [makeClient({ arc_stage: 'peak', audience: 100_000, stats: highStats })],
+    });
+    expect(generateDecisionBoard(aboveThreshold, manifest)).toHaveLength(1);
+  });
+
   it('generates a contract draft when template has a contract_template_key', () => {
     jest.spyOn(Math, 'random').mockReturnValue(0.5);
     const clientId       = nextId();
@@ -551,6 +973,174 @@ describe('decision-queue — generateDecisionBoard', () => {
     if (item) {
       expect(item.contract_draft).not.toBeNull();
     }
+  });
+
+  it('keeps the early board small even with many eligible items', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const templates = Array.from({ length: 8 }, (_, i) => ({
+      key: `early_tmpl_${i}`,
+      type: 'opportunity' as const,
+      description_template: 'Early item',
+      rep_gate: 0,
+      valid_arc_stages: [] as any[],
+      contract_template_key: null,
+      default_on_ignore_key: 'skip',
+      expires_in: null,
+    }));
+    const manifest = makeManifest({ board_item_templates: templates });
+    const state = makeRunState({ turn_number: 2, roster: [makeClient()] });
+    const board = generateDecisionBoard(state, manifest);
+    expect(board).toHaveLength(EARLY_BOARD_MAX_ITEMS);
+  });
+
+  it('lets board pressure grow with time, roster, reputation, campaigns, and entity deals', () => {
+    const clientId = nextId();
+    const state = makeRunState({
+      turn_number: 16,
+      reputation: 75,
+      roster: [makeClient({ id: clientId }), makeClient(), makeClient()],
+      campaigns: [{
+        id: nextId(),
+        client_id: clientId,
+        type_key: 'tour',
+        total_turns: 6,
+        turns_remaining: 3,
+        installment_results: [],
+        pending_objective_ids: [],
+      }],
+      contracts: [makeContract({ tier: 'client_entity', client_id: clientId, duration_remaining: 8, your_cut: null })],
+    });
+    expect(computeDecisionBoardTargetCount(state)).toBeGreaterThan(BOARD_MIN_ITEMS);
+  });
+
+  it('slows board pressure after multiple skipped turns in a row', () => {
+    const clientId = nextId();
+    const baseState = makeRunState({
+      turn_number: 24,
+      reputation: 80,
+      roster: [makeClient({ id: clientId }), makeClient(), makeClient(), makeClient()],
+      campaigns: [{
+        id: nextId(),
+        client_id: clientId,
+        type_key: 'tour',
+        total_turns: 6,
+        turns_remaining: 3,
+        installment_results: [],
+        pending_objective_ids: [],
+      }],
+      contracts: [makeContract({ tier: 'client_entity', client_id: clientId, duration_remaining: 8, your_cut: null })],
+    });
+    const engagedTarget = computeDecisionBoardTargetCount(baseState);
+    const skippedTarget = computeDecisionBoardTargetCount({
+      ...baseState,
+      narrator_pacing: { consecutive_skipped_turns: 3, last_turn_skipped_items: 2 },
+    });
+    expect(skippedTarget).toBeLessThan(engagedTarget);
+  });
+
+  it('can increase board pressure when an engaged player has a fresh album release', () => {
+    const baseline = makeRunState({
+      turn_number: 14,
+      reputation: 50,
+      roster: [makeClient(), makeClient()],
+      narrator_pacing: { consecutive_skipped_turns: 0, last_turn_skipped_items: 0 },
+    });
+    const withAlbum = {
+      ...baseline,
+      roster: [
+        makeClient({ catalog_releases: [makeAlbumRelease()] }),
+        makeClient(),
+      ],
+    };
+    expect(computeDecisionBoardTargetCount(withAlbum)).toBeGreaterThan(computeDecisionBoardTargetCount(baseline));
+  });
+
+  it('does not generate label or sponsor offers for weak early clients', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const weakClient = makeClient({
+      id: clientId,
+      arc_stage: 'rising',
+      audience: 1_000,
+      stats: makeClientStats({ talent: 48, form: 45, marketability: 42 }),
+    });
+    const labelTemplate = makeContractTemplate({
+      key: 'label_basic',
+      tier: 'client_entity',
+      payout_type: 'per_week',
+      cut_range: null,
+      exclusivity_scope: 'label',
+      rep_gate: 0,
+    });
+    const sponsorTemplate = makeContractTemplate({
+      key: 'sponsor_basic',
+      tier: 'client_entity',
+      payout_type: 'lump_sum',
+      cut_range: null,
+      exclusivity_scope: 'sponsor',
+      rep_gate: 0,
+    });
+    const manifest = makeManifest({
+      contract_templates: [labelTemplate, sponsorTemplate],
+      board_item_templates: [
+        {
+          key: 'label_offer',
+          type: 'contract_offer' as const,
+          description_template: 'Label offer',
+          rep_gate: 0,
+          valid_arc_stages: ['rising'] as any[],
+          contract_template_key: 'label_basic',
+          default_on_ignore_key: 'reject',
+          expires_in: 2,
+        },
+        {
+          key: 'sponsor_offer',
+          type: 'opportunity' as const,
+          description_template: 'Sponsor offer',
+          rep_gate: 0,
+          valid_arc_stages: ['rising'] as any[],
+          contract_template_key: 'sponsor_basic',
+          default_on_ignore_key: 'pass',
+          expires_in: 2,
+        },
+      ],
+    });
+    const board = generateDecisionBoard(makeRunState({ turn_number: 3, reputation: 20, roster: [weakClient] }), manifest);
+    expect(board.some(i => i.template_key === 'label_offer' || i.template_key === 'sponsor_offer')).toBe(false);
+  });
+
+  it('can generate a sponsor offer once client marketability and agency reputation are high enough', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const strongClient = makeClient({
+      id: clientId,
+      arc_stage: 'peak',
+      audience: 250_000,
+      stats: makeClientStats({ talent: 72, form: 75, marketability: 82 }),
+    });
+    const sponsorTemplate = makeContractTemplate({
+      key: 'sponsor_basic',
+      tier: 'client_entity',
+      payout_type: 'lump_sum',
+      cut_range: null,
+      exclusivity_scope: 'sponsor',
+      rep_gate: 0,
+    });
+    const manifest = makeManifest({
+      contract_templates: [sponsorTemplate],
+      board_item_templates: [{
+        key: 'sponsor_offer',
+        type: 'opportunity' as const,
+        description_template: 'Sponsor offer',
+        rep_gate: 0,
+        valid_arc_stages: ['peak'] as any[],
+        contract_template_key: 'sponsor_basic',
+        default_on_ignore_key: 'pass',
+        expires_in: 2,
+      }],
+    });
+    const board = generateDecisionBoard(makeRunState({ turn_number: 14, reputation: 50, roster: [strongClient] }), manifest);
+    expect(board.some(i => i.template_key === 'sponsor_offer')).toBe(true);
   });
 });
 
@@ -702,6 +1292,113 @@ describe('decision-queue — generateDecisionBoard campaign-gated templates', ()
     expect(gated?.campaign_id).toBe(campaignId);
     expect(gated?.client_id).toBe(clientId);
   });
+
+  it('does not generate post-release selling decisions before a single is released', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const sellingTemplate = {
+      key: 'selling_different_sound',
+      type: 'client_request' as const,
+      description_template: '{client_name} has a post-release issue.',
+      requires_catalog_release_kind: ['single' as const],
+      rep_gate: 0,
+      valid_arc_stages: [] as any[],
+      contract_template_key: null,
+      default_on_ignore_key: 'do_nothing',
+      expires_in: 1,
+    };
+    const manifest = makeManifest({ board_item_templates: [sellingTemplate] });
+    const activeSingle = {
+      id: nextId(),
+      client_id: clientId,
+      type_key: 'single_release',
+      total_turns: 2,
+      turns_remaining: 1,
+      installment_results: [],
+      pending_objective_ids: [],
+      release_plan: { kind: 'single' as const, title: 'Pending Single', songs: [] },
+    };
+
+    const board = generateDecisionBoard(
+      makeRunState({
+        roster: [makeClient({ id: clientId })],
+        campaigns: [activeSingle],
+      }),
+      manifest,
+    );
+
+    expect(board.some(i => i.template_key === 'selling_different_sound')).toBe(false);
+  });
+
+  it('generates post-release selling decisions for clients with matching catalog releases', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const sellingTemplate = {
+      key: 'selling_different_sound',
+      type: 'client_request' as const,
+      description_template: '{client_name} has a post-release issue.',
+      requires_catalog_release_kind: ['single' as const],
+      rep_gate: 0,
+      valid_arc_stages: [] as any[],
+      contract_template_key: null,
+      default_on_ignore_key: 'do_nothing',
+      expires_in: 1,
+    };
+    const manifest = makeManifest({ board_item_templates: [sellingTemplate] });
+
+    const board = generateDecisionBoard(
+      makeRunState({
+        roster: [makeClient({
+          id: clientId,
+          catalog_releases: [makeAlbumRelease({ kind: 'single', type_key: 'single_release' })],
+        })],
+      }),
+      manifest,
+    );
+
+    const item = board.find(i => i.template_key === 'selling_different_sound');
+    expect(item?.client_id).toBe(clientId);
+    expect(item?.campaign_id).toBeNull();
+  });
+
+  it('generates tour technical accident decisions with selectable options', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const campaignId = nextId();
+    const manifest = makeManifest({
+      board_item_templates: [{
+        key: 'tour_technical_accident',
+        type: 'client_request',
+        description_template: 'A technical accident mid-set has thrown {client_name} into chaos.',
+        campaign_type_keys: ['tour'],
+        rep_gate: 0,
+        valid_arc_stages: [],
+        contract_template_key: null,
+        default_on_ignore_key: 'try_resolve',
+        expires_in: 1,
+      }],
+    });
+
+    const board = generateDecisionBoard(
+      makeRunState({
+        roster: [makeClient({ id: clientId })],
+        campaigns: [{
+          id: campaignId,
+          client_id: clientId,
+          type_key: 'tour',
+          total_turns: 4,
+          turns_remaining: 4,
+          installment_results: [],
+          pending_objective_ids: [],
+        }],
+      }),
+      manifest,
+    );
+
+    const item = board.find(i => i.template_key === 'tour_technical_accident');
+    expect(item?.options.map(option => option.key)).toEqual(['embrace_chaos', 'try_resolve']);
+    jest.restoreAllMocks();
+  });
 });
 
 // ─── activateContract — extra coverage ───────────────────────────────────────
@@ -709,13 +1406,36 @@ describe('decision-queue — generateDecisionBoard campaign-gated templates', ()
 describe('decision-queue — activateContract (prospect promotion)', () => {
   it('promotes prospect to roster on agent_client contract activation', () => {
     const prospectId = nextId();
-    const prospect = { id: prospectId, name: 'Test Prospect', arc_stage: 'rising' as const, audience: 5_000, stats: makeClientStats(), scouting_invested: 0, max_potential: 80 };
+    const prospect = { id: prospectId, name: 'Test Prospect', age_weeks: 20 * 52, arc_stage: 'rising' as const, audience: 5_000, stats: makeClientStats(), scouting_invested: 0, max_potential: 80, expires_in: 10, generated_at_reputation: 50 };
     const draft = makeContractDraft({ tier: 'agent_client', client_id: prospectId });
     const state = makeRunState({ roster: [], prospects: [prospect] });
     const result = activateContract(state, draft, makeManifest());
     expect(result.roster).toHaveLength(1);
     expect(result.roster[0].id).toBe(prospectId);
     expect(result.prospects).toHaveLength(0);
+  });
+
+  it('preserves prospect portrait and gender on queued signing activation', () => {
+    const prospectId = nextId();
+    const prospect = {
+      id: prospectId,
+      name: 'Rare Prospect',
+      gender: 'female' as const,
+      portrait: 'something_phonehead',
+      age_weeks: 20 * 52,
+      arc_stage: 'rising' as const,
+      audience: 5_000,
+      stats: makeClientStats(),
+      scouting_invested: 0,
+      max_potential: 80,
+      expires_in: 10,
+      generated_at_reputation: 50,
+    };
+    const draft = makeContractDraft({ tier: 'agent_client', client_id: prospectId });
+    const state = makeRunState({ roster: [], prospects: [prospect] });
+    const result = activateContract(state, draft, makeManifest());
+    expect(result.roster[0].portrait).toBe('something_phonehead');
+    expect(result.roster[0].gender).toBe('female');
   });
 
   it('client_entity tier does not link to roster (tier !== agent_client branch)', () => {
@@ -858,6 +1578,55 @@ describe('decision-queue — generateDecisionBoard empty roster', () => {
     const state = makeRunState({ roster: [] });
     const board = generateDecisionBoard(state, manifest);
     expect(board[0].client_id).toBeNull();
+  });
+});
+
+// ─── generateDecisionBoard — tutorial turn-1 suppression ─────────────────────
+
+describe('decision-queue — generateDecisionBoard tutorial suppression', () => {
+  const template = {
+    key: 'general_opp',
+    type: 'opportunity' as const,
+    description_template: 'General opportunity',
+    rep_gate: 0,
+    valid_arc_stages: [] as any[],
+    contract_template_key: null,
+    default_on_ignore_key: 'skip',
+    expires_in: null,
+  };
+
+  it('returns an empty board on turn 1 while tutorial is active', () => {
+    const manifest = makeManifest({ board_item_templates: [template] });
+    const state = makeRunState({ turn_number: 1, tutorial_step: 'friend_pitch' });
+    const board = generateDecisionBoard(state, manifest);
+    expect(board).toHaveLength(0);
+  });
+
+  it('generates decisions normally on turn 1 when tutorial is done', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const manifest = makeManifest({ board_item_templates: [template] });
+    const state = makeRunState({ turn_number: 1, tutorial_step: 'done' });
+    const board = generateDecisionBoard(state, manifest);
+    expect(board.length).toBeGreaterThan(0);
+    jest.restoreAllMocks();
+  });
+
+  it('generates decisions normally on turn 1 when tutorial_step is null (no tutorial)', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const manifest = makeManifest({ board_item_templates: [template] });
+    const state = makeRunState({ turn_number: 1, tutorial_step: null });
+    const board = generateDecisionBoard(state, manifest);
+    expect(board.length).toBeGreaterThan(0);
+    jest.restoreAllMocks();
+  });
+
+  it('does not suppress the board on turn 2 even with an active tutorial step', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const manifest = makeManifest({ board_item_templates: [template] });
+    const state = makeRunState({ turn_number: 2, tutorial_step: 'roster_highlight' });
+    const board = generateDecisionBoard(state, manifest);
+    expect(board.length).toBeGreaterThan(0);
+    jest.restoreAllMocks();
   });
 });
 
@@ -1076,6 +1845,40 @@ describe('decision-queue — resolveCounteroffer', () => {
     const state    = makeRunState({ roster: [client], decision_board: [item] });
     const result   = resolveCounteroffer(state, item.id, { amount: 13_000 }, makeManifest());
     expect(result.contracts[0].amount).toBe(13_000);
+    // board item's contract_draft must also reflect the accepted counter terms
+    expect(result.decision_board[0].contract_draft?.amount).toBe(13_000);
+  });
+
+  it('accepted renewal counter expires the current contract', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.01);
+    const clientId = nextId();
+    const currentContract = makeContract({ client_id: clientId, tier: 'agent_client', duration_remaining: 1 });
+    const client = makeClient({ id: clientId, agent_contract_id: currentContract.id });
+    const draft = makeContractDraft({
+      client_id: clientId,
+      counterparty_posture: { true_value: 0.9, is_revealed: true, observed_min: 0.85, observed_max: 0.95 },
+    });
+    const item = makeBoardItem({
+      type: 'renewal',
+      client_id: clientId,
+      contract_id: currentContract.id,
+      contract_draft: draft,
+    });
+    const state = makeRunState({
+      roster: [client],
+      contracts: [currentContract],
+      decision_board: [item],
+    });
+
+    const result = resolveCounteroffer(state, item.id, { amount: 13_000 }, makeManifest());
+    const expired = result.contracts.find(c => c.id === currentContract.id);
+    const renewed = result.contracts.find(c => c.id !== currentContract.id);
+
+    expect(expired?.duration_remaining).toBe(0);
+    expect(renewed?.amount).toBe(13_000);
+    expect(result.decision_board[0].resolved_result_description).toBe(
+      'Renewed. The current contract will be replaced by the new term.',
+    );
   });
 
   it('revised path: item stays unresolved and draft is updated toward counter terms', () => {
@@ -1101,6 +1904,35 @@ describe('decision-queue — resolveCounteroffer', () => {
     const result = resolveCounteroffer(state, item.id, { amount: 1_000_000 }, makeManifest());
     expect(result.reputation).toBeLessThan(50);
     expect(result.decision_board[0].is_resolved).toBe(true);
+    expect(result.decision_board[0].chosen_option_key).toBe('counter_rejected');
+  });
+
+  it('rejected path: removes an unsigned prospect who refuses an agent contract', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.99); // guaranteed rejected
+    const prospectId = nextId();
+    const prospect = {
+      id: prospectId,
+      name: 'Declining Prospect',
+      age_weeks: 20 * 52,
+      arc_stage: 'rising' as const,
+      audience: 5_000,
+      stats: makeClientStats(),
+      scouting_invested: 0,
+      max_potential: 80,
+      expires_in: 5,
+      generated_at_reputation: 0,
+    };
+    const draft = makeContractDraft({
+      tier: 'agent_client',
+      client_id: prospectId,
+      counterparty_posture: { true_value: 0.1, is_revealed: false, observed_min: null, observed_max: null },
+    });
+    const item  = makeBoardItem({ client_id: prospectId, contract_draft: draft });
+    const state = makeRunState({ prospects: [prospect], decision_board: [item] });
+
+    const result = resolveCounteroffer(state, item.id, { amount: 1_000_000 }, makeManifest());
+
+    expect(result.prospects.some(p => p.id === prospectId)).toBe(false);
     expect(result.decision_board[0].chosen_option_key).toBe('counter_rejected');
   });
 
@@ -1143,7 +1975,7 @@ const makeRenewalManifest = () => {
   const contractTemplate = makeContractTemplate({
     key: 'agent_renewal',
     tier: 'agent_client',
-    payout_type: 'per_month',
+    payout_type: 'per_week',
     cut_range: [10, 20],
   });
   const renewalBoardTemplate = {
@@ -1153,6 +1985,30 @@ const makeRenewalManifest = () => {
     rep_gate: 0,
     valid_arc_stages: ['rising', 'peak', 'declining'] as any[],
     contract_template_key: 'agent_renewal',
+    default_on_ignore_key: 'let_expire',
+    expires_in: 2,
+  };
+  return makeManifest({
+    contract_templates: [contractTemplate],
+    board_item_templates: [renewalBoardTemplate],
+  });
+};
+
+const makeLabelRenewalManifest = () => {
+  const contractTemplate = makeContractTemplate({
+    key: 'label_renewal_template',
+    tier: 'client_entity',
+    payout_type: 'per_week',
+    cut_range: null,
+    exclusivity_scope: 'label',
+  });
+  const renewalBoardTemplate = {
+    key: 'label_renewal',
+    type: 'renewal' as const,
+    description_template: "{client_name}'s label wants to renew the deal.",
+    rep_gate: 0,
+    valid_arc_stages: ['rising', 'peak', 'declining'] as any[],
+    contract_template_key: 'label_renewal_template',
     default_on_ignore_key: 'let_expire',
     expires_in: 2,
   };
@@ -1234,6 +2090,70 @@ describe('decision-queue — generateContractRenewalOffers', () => {
     expect(offers).toHaveLength(0);
   });
 
+  it('generates a label renewal when the label objectives were completed', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const clientId = nextId();
+    const client = makeClient({
+      id: clientId,
+      stats: makeClientStats({ morale: RENEWAL_MORALE_THRESHOLD - 1 }),
+    });
+    const contract = makeContract({
+      client_id: clientId,
+      tier: 'client_entity',
+      entity_id: 'Northstar Records',
+      your_cut: null,
+      exclusivity_scope: 'label',
+      duration_remaining: 2,
+      objectives: [
+        {
+          id: nextId(),
+          description: 'Release one album during the deal',
+          payout: 5_000,
+          condition_key: 'album_released',
+          is_met: true,
+          is_paid: true,
+        },
+      ],
+    });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+    const offers = generateContractRenewalOffers(state, makeLabelRenewalManifest());
+    expect(offers).toHaveLength(1);
+    expect(offers[0].contract_id).toBe(contract.id);
+    expect(offers[0].contract_draft?.entity_id).toBe('Northstar Records');
+    expect(offers[0].contract_draft?.exclusivity_scope).toBe('label');
+  });
+
+  it('does not generate a label renewal when the label has no objective or momentum satisfaction', () => {
+    const clientId = nextId();
+    const client = makeClient({
+      id: clientId,
+      audience: 10_000,
+      catalog_releases: [],
+      stats: makeClientStats({ form: 60, morale: 95 }),
+    });
+    const contract = makeContract({
+      client_id: clientId,
+      tier: 'client_entity',
+      entity_id: 'Northstar Records',
+      your_cut: null,
+      exclusivity_scope: 'label',
+      duration_remaining: 2,
+      objectives: [
+        {
+          id: nextId(),
+          description: 'Release one album during the deal',
+          payout: 5_000,
+          condition_key: 'album_released',
+          is_met: false,
+          is_paid: false,
+        },
+      ],
+    });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+    const offers = generateContractRenewalOffers(state, makeLabelRenewalManifest());
+    expect(offers).toHaveLength(0);
+  });
+
   it('includes a contract_draft on the renewal item', () => {
     jest.spyOn(Math, 'random').mockReturnValue(0.5);
     const clientId = nextId();
@@ -1242,6 +2162,123 @@ describe('decision-queue — generateContractRenewalOffers', () => {
     const state = makeRunState({ roster: [client], contracts: [contract] });
     const offers = generateContractRenewalOffers(state, makeRenewalManifest());
     expect(offers[0].contract_draft).not.toBeNull();
+  });
+
+  it('renewal draft amount is at least the current contract amount', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ morale: 80 }) });
+    // Template with rand=0.5 generates ~10k; contract at 24k keeps the floor.
+    const contract = makeContract({
+      client_id: clientId,
+      tier: 'agent_client',
+      amount: 24_000,
+      your_cut: 23,
+      obligations_per_turn: 900,
+      duration_remaining: 1,
+    });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+
+    const offers = generateContractRenewalOffers(state, makeRenewalManifest());
+    const draft = offers[0].contract_draft;
+
+    expect(draft?.amount).toBeGreaterThanOrEqual(contract.amount);
+    expect(draft?.obligations_per_turn).toBe(contract.obligations_per_turn);
+    expect(draft?.duration).toBeGreaterThan(contract.duration_remaining);
+  });
+
+  it('renewal draft cut is never higher than the current contract cut', () => {
+    // rand=0.9 pushes template cut toward 20 (top of [10,20] range); contract cut is 12
+    jest.spyOn(Math, 'random').mockReturnValue(0.9);
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ morale: 80 }) });
+    const contract = makeContract({
+      client_id: clientId,
+      tier: 'agent_client',
+      your_cut: 12,
+      duration_remaining: 1,
+    });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+
+    const offers = generateContractRenewalOffers(state, makeRenewalManifest());
+    expect(offers[0].contract_draft?.your_cut).toBeLessThanOrEqual(contract.your_cut!);
+  });
+
+  it('renewal draft amount grows when template reflects stronger stats than original deal', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ morale: 80 }) });
+    // Contract locked in at 5k; template with current stats generates ~10k
+    const contract = makeContract({
+      client_id: clientId,
+      tier: 'agent_client',
+      amount: 5_000,
+      duration_remaining: 1,
+    });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+
+    const offers = generateContractRenewalOffers(state, makeRenewalManifest());
+    expect(offers[0].contract_draft?.amount).toBeGreaterThan(contract.amount);
+  });
+});
+
+describe('decision-queue — queueContractRenewalOffer', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('queues a renewal offer for a near-expiry current contract', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    const clientId = nextId();
+    const client = makeClient({ id: clientId, stats: makeClientStats({ morale: 20 }) });
+    const contract = makeContract({
+      client_id: clientId,
+      tier: 'agent_client',
+      amount: 18_000,
+      duration_remaining: 1,
+    });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+
+    const result = queueContractRenewalOffer(state, contract.id, makeRenewalManifest());
+
+    expect(result.decision_board).toHaveLength(1);
+    expect(result.decision_board[0].type).toBe('renewal');
+    expect(result.decision_board[0].contract_id).toBe(contract.id);
+    expect(result.decision_board[0].contract_draft?.amount).toBe(contract.amount);
+  });
+
+  it('does not queue a duplicate unresolved renewal for the same contract', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId });
+    const contract = makeContract({ client_id: clientId, tier: 'agent_client', duration_remaining: 1 });
+    const existingRenewal = makeDecisionItem({
+      type: 'renewal',
+      client_id: clientId,
+      contract_id: contract.id,
+      is_resolved: false,
+    });
+    const state = makeRunState({
+      roster: [client],
+      contracts: [contract],
+      decision_board: [existingRenewal],
+    });
+
+    const result = queueContractRenewalOffer(state, contract.id, makeRenewalManifest());
+
+    expect(result).toBe(state);
+  });
+
+  it('does not queue a renewal for a contract that is not near expiry', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId });
+    const contract = makeContract({
+      client_id: clientId,
+      tier: 'agent_client',
+      duration_remaining: RENEWAL_NOTICE_TURNS + 1,
+    });
+    const state = makeRunState({ roster: [client], contracts: [contract] });
+
+    const result = queueContractRenewalOffer(state, contract.id, makeRenewalManifest());
+
+    expect(result).toBe(state);
   });
 });
 
@@ -1268,5 +2305,129 @@ describe('decision-queue — generateDecisionBoard includes triggered renewals',
     const state = makeRunState({ roster: [client], contracts: [contract] });
     const board = generateDecisionBoard(state, makeRenewalManifest());
     expect(board.some(i => i.type === 'renewal')).toBe(false);
+  });
+});
+
+// ─── injectAlbumOptionDecision ────────────────────────────────────────────────
+
+describe('decision-queue — injectAlbumOptionDecision', () => {
+  it('adds a label_option item to the decision board', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId });
+    const labelContract = makeContract({
+      client_id: clientId,
+      tier: 'client_entity',
+      entity_id: 'Velvet District',
+      exclusivity_scope: 'label',
+      duration_remaining: 8,
+      album_option: { success_threshold: 55, duration: 12 },
+    });
+    const state = makeRunState({ roster: [client], contracts: [labelContract] });
+    const result = injectAlbumOptionDecision(state, clientId, labelContract);
+    const item = result.decision_board.find(i => i.type === 'label_option');
+    expect(item).toBeDefined();
+    expect(item?.client_id).toBe(clientId);
+    expect(item?.contract_draft?.duration).toBe(12);
+    expect(item?.contract_draft?.entity_id).toBe('Velvet District');
+    expect(item?.contract_draft?.exclusivity_scope).toBe('label');
+  });
+
+  it('is a no-op when the contract has no album_option', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId });
+    const labelContract = makeContract({ client_id: clientId, album_option: null });
+    const state = makeRunState({ roster: [client], contracts: [labelContract] });
+    const result = injectAlbumOptionDecision(state, clientId, labelContract);
+    expect(result).toBe(state);
+  });
+
+  it('is a no-op when a pending label_option already exists for the client', () => {
+    const clientId = nextId();
+    const client = makeClient({ id: clientId });
+    const labelContract = makeContract({
+      client_id: clientId,
+      album_option: { success_threshold: 55, duration: 12 },
+    });
+    const state = makeRunState({ roster: [client], contracts: [labelContract] });
+    const first = injectAlbumOptionDecision(state, clientId, labelContract);
+    const second = injectAlbumOptionDecision(first, clientId, labelContract);
+    expect(second.decision_board.filter(i => i.type === 'label_option')).toHaveLength(1);
+  });
+});
+
+// ─── resolveDecisionItem — label_option ───────────────────────────────────────
+
+describe('decision-queue — resolveDecisionItem label_option', () => {
+  const setupOptionState = () => {
+    const clientId = nextId();
+    const contractId = nextId();
+    const client = makeClient({ id: clientId });
+    const labelContract = makeContract({
+      id: contractId,
+      client_id: clientId,
+      tier: 'client_entity',
+      entity_id: 'Blue Hour Records',
+      exclusivity_scope: 'label',
+      duration_remaining: 6,
+      album_option: { success_threshold: 55, duration: 12 },
+    });
+    const draft = makeContractDraft({
+      tier: 'client_entity',
+      client_id: clientId,
+      entity_id: 'Blue Hour Records',
+      your_cut: null,
+      exclusivity_scope: 'label',
+      duration: 12,
+      album_option: null,
+    });
+    const item: DecisionItem = {
+      id: nextId(),
+      type: 'label_option',
+      template_key: 'label_album_option',
+      campaign_id: null,
+      client_id: clientId,
+      contract_id: contractId,
+      contract_draft: draft,
+      description: `${client.name}'s label is exercising their album option.`,
+      options: [
+        { key: 'approve', label: 'Accept', outcome: { money_delta: 0, reputation_delta: 1, stat_deltas: {}, morale_delta: 0, activates_contract_id: null }, push_risk: null },
+        { key: 'reject', label: 'Refuse', outcome: { money_delta: 0, reputation_delta: -2, stat_deltas: {}, morale_delta: 0, activates_contract_id: null }, push_risk: null },
+      ],
+      default_on_ignore: { money_delta: 0, reputation_delta: -2, stat_deltas: {}, morale_delta: 0, activates_contract_id: null },
+      expires_in: 3,
+      is_resolved: false,
+      chosen_option_key: null,
+      resolved_outcome: null,
+      resolved_result_label: null,
+      resolved_result_description: null,
+    };
+    const state = makeRunState({
+      roster: [client],
+      contracts: [labelContract],
+      decision_board: [item],
+    });
+    return { state, item, contractId, clientId };
+  };
+
+  it('approve activates a new label contract and expires the old one', () => {
+    const { state, item, contractId, clientId } = setupOptionState();
+    const result = resolveDecisionItem(state, item.id, 'approve', makeManifest());
+    const resolved = result.decision_board.find(i => i.id === item.id);
+    expect(resolved?.is_resolved).toBe(true);
+    expect(resolved?.chosen_option_key).toBe('approve');
+    const newContract = result.contracts.find(c => c.client_id === clientId && c.duration_remaining === 12);
+    expect(newContract).toBeDefined();
+    const oldContract = result.contracts.find(c => c.id === contractId);
+    expect(oldContract?.duration_remaining).toBe(0);
+  });
+
+  it('reject terminates the label contract and applies rep penalty', () => {
+    const { state, item, contractId } = setupOptionState();
+    const result = resolveDecisionItem(state, item.id, 'reject', makeManifest());
+    const resolved = result.decision_board.find(i => i.id === item.id);
+    expect(resolved?.is_resolved).toBe(true);
+    expect(resolved?.chosen_option_key).toBe('reject');
+    expect(result.contracts.find(c => c.id === contractId)?.duration_remaining).toBe(0);
+    expect(result.reputation).toBeLessThan(state.reputation);
   });
 });

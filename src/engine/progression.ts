@@ -143,6 +143,55 @@ export const upgradeInfrastructure: UpgradeInfrastructure = (state, key, manifes
   };
 };
 
+export type DowngradeInfrastructure = (
+  state: RunState,
+  key: InfrastructureUpgradeKey,
+  manifest: VariantManifest,
+) => RunState;
+
+// Removes one level from the infrastructure track and refunds 50% of the cost
+// that was paid to reach the current level. For roster_slot, refuses if capacity
+// would drop below the current roster size (can't evict clients implicitly).
+export const downgradeInfrastructure: DowngradeInfrastructure = (state, key, manifest) => {
+  const base = BASE_INFRA_COSTS[key] ?? manifest.economy.defense_track_upgrade_cost;
+
+  if (key === 'roster_slot') {
+    if (state.agent.roster_capacity <= state.roster.length) return state;
+    const refund = Math.round(base.money * 0.5);
+    return {
+      ...state,
+      money: state.money + refund,
+      agent: { ...state.agent, roster_capacity: state.agent.roster_capacity - 1 },
+    };
+  }
+
+  const idx = state.agent.defense_tracks.findIndex(t => t.key === key);
+  if (idx < 0) return state;
+  const track = state.agent.defense_tracks[idx];
+  if (track.level <= 0) return state;
+
+  // Refund 50% of what was paid to reach the current level from the level below.
+  const multiplierAtPrev = 1 + (track.level - 1) * 0.4;
+  const refund = Math.round(base.money * multiplierAtPrev * 0.5);
+
+  const newLevel = track.level - 1;
+  // per_turn_cost at newLevel is what was set when upgrading to that level.
+  const newPerTurnCost = newLevel > 0
+    ? Math.round(base.per_turn_recurring * (1 + (newLevel - 1) * 0.4))
+    : 0;
+
+  const newTracks: DefenseTrack[] = newLevel === 0
+    ? state.agent.defense_tracks.filter((_, i) => i !== idx)
+    : state.agent.defense_tracks.map((t, i) =>
+        i === idx ? { ...t, level: newLevel, per_turn_cost: newPerTurnCost } : t);
+
+  return {
+    ...state,
+    money: state.money + refund,
+    agent: { ...state.agent, defense_tracks: newTracks },
+  };
+};
+
 export type ApplyBuildingDevelopment = (state: RunState) => RunState;
 
 export const applyBuildingDevelopment: ApplyBuildingDevelopment = (state) => {
@@ -195,7 +244,7 @@ export const boostClientStat: BoostClientStat = (state, clientId, statKey) => {
 export type ApplyContractSatisfaction = (state: RunState, manifest: VariantManifest) => RunState;
 
 // Each turn, morale drifts based on how well the client's current deals match their expectations.
-// Income component (-2..+2): compares per_month entity contract total to the arc-scaled threshold.
+// Income component (-2..+2): compares per_week entity contract total to the arc-scaled threshold.
 // Fan component (-1..+1): based on fan_delta in the client's most recent completed campaign.
 // Total delta is clamped to [-2, +2].
 export const applyContractSatisfaction: ApplyContractSatisfaction = (state, manifest) => {
@@ -208,7 +257,7 @@ export const applyContractSatisfaction: ApplyContractSatisfaction = (state, mani
     const expected = threshold * arcIncomeMult;
 
     const entityIncome = state.contracts
-      .filter(c => c.tier === 'client_entity' && c.client_id === client.id && c.payout_type === 'per_month')
+      .filter(c => c.tier === 'client_entity' && c.client_id === client.id && c.payout_type === 'per_week')
       .reduce((sum, c) => sum + c.amount, 0);
 
     let incomeComponent: number;

@@ -29,8 +29,8 @@ Each sub-section has a corresponding test file.
 
 - [ ] `applyMoneyDelta` — apply delta, clamp to 0, open debt state if result ≤ 0
 - [ ] `applyReputationDelta` — apply delta, clamp to `[MIN_REPUTATION, MAX_REPUTATION]`
-- [ ] `computeMonthlyIncome` — sum `per_month` contract amounts × `your_cut` for all active contracts
-- [ ] `computeMonthlyExpenses` — overhead + obligations + defense track recurring costs, scaled by Operations multiplier
+- [ ] `computeWeeklyIncome` — sum `per_week` contract amounts × `your_cut` for all active contracts
+- [ ] `computeWeeklyExpenses` — overhead + obligations + defense track recurring costs, scaled by Operations multiplier
 - [ ] `earnLumpSum` — named wrapper around `applyMoneyDelta` for one-time payouts
 - [ ] `settleObjectivePayouts` — find met objectives, pay out, mark `is_met = true`
 - [ ] `computeRepTier` — map raw Reputation → `RepTier` enum
@@ -47,7 +47,7 @@ with placeholder weights that can be tuned later.
       - Inputs: `scouting_invested`, agent skill level (stat vs insight), `turns_on_roster`
       - Hard stats (Talent): uses `stat_scouting`; floor at `FOG_FLOOR_HARD` (band never collapses)
       - Soft stats (Form/Morale/Marketability): uses `insight_scouting`; floor at `FOG_FLOOR_SOFT`
-      - Tenure contribution: asymptotic curve (most gain in first ~12 turns on roster)
+      - Tenure contribution: asymptotic curve (most gain in first ~12 weeks on roster)
 - [ ] `refreshClientFog` — recompute all four stats via `computeObservedStat`
 - [ ] `refreshProspectFog` — same but `turns_on_roster = 0`
 - [ ] `investScouting` — increment `scouting_invested` on a stat, trigger `refreshClientFog`
@@ -155,8 +155,8 @@ A minimal but fully playable music-industry variant. Placeholder economy values 
 
 - [ ] Domain labels (Artist, Label, Manager, Cash, Clout)
 - [ ] Stat sub-attributes: Vocal / Songwriting / Performance → Talent; Buzz → Form; Fanbase / Brand → Marketability
-- [ ] Entity types: Record Label (per_month), Streaming Platform (per_objective), Sponsorship (lump_sum)
-- [ ] Campaign types: Album Cycle (10 turns), Tour (6 turns), Single Release (2 turns)
+- [ ] Entity types: Record Label (per_week), Streaming Platform (per_objective), Sponsorship (lump_sum)
+- [ ] Campaign types: Album Cycle (10 weeks), Tour (6 weeks), Single Release (2 weeks)
 - [ ] Trait library: 8 traits (e.g. Viral Moment, Burnout Risk, Critically Acclaimed, Touring Machine)
 - [ ] Event library: 12 events covering all 4 categories and all 3 severity tiers
 - [ ] Board item templates: 8 templates (2 per item type)
@@ -295,7 +295,7 @@ Core gameplay loop — highest priority screen.
 
 ### 5c — Resolve open questions (PRD §6)
 
-- [ ] §6.1 Career length — pick a starting value (e.g. 60 turns = 5 years), tune in playtesting
+- [ ] §6.1 Career length — pick a starting value (e.g. 60 weeks), tune in playtesting
 - [ ] §6.2 Fog narrowing curve — set weights; confirm Talent never reaches zero band
 - [ ] §6.3 Push risk curve — set negotiation level → success_probability table
 - [ ] §6.4 Exposure formula — set w1/w2/w3 weights; target ~0.5 events/turn at mid-game
@@ -304,7 +304,7 @@ Core gameplay loop — highest priority screen.
 
 ### 5d — Economy tuning pass
 
-- [ ] Adjust music variant starting money/rep so first 3 turns are tight but survivable
+- [ ] Adjust music variant starting money/rep so first 3 weeks are tight but survivable
 - [ ] Verify agent stat upgrade costs feel meaningful but achievable
 - [ ] Verify a Rising client → Peak → Declining arc feels like a career, not a sprint
 

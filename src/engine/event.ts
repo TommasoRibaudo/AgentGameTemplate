@@ -2,6 +2,7 @@ import { GameEvent, EventOutcome, EventOption } from '../types/event';
 import { EventCategory, EventSeverity } from '../types/primitives';  // EventSeverity used in sort ORDER
 import { NewsItem, RunState } from '../types/run';
 import { EventDefinition, VariantManifest } from '../types/manifest';
+import { computeClientNarrativeWeight, computeNarratorPacingMultiplier, computeNarratorTurnRamp } from './narrator';
 
 // INVARIANTS (PRD §3.4):
 // - Frequency targets 0–2 per turn, weighted toward 0–1.
@@ -25,8 +26,17 @@ const matchingActiveCampaigns = (state: RunState, def: { campaign_type_keys?: st
   return state.campaigns.filter(c => c.turns_remaining > 0 && keys.includes(c.type_key));
 };
 
-const isEventEligibleForState = (state: RunState, def: EventDefinition): boolean =>
-  campaignGate(def).length === 0 || matchingActiveCampaigns(state, def).length > 0;
+const clientsWithActiveScope = (state: RunState, scope: string): string[] =>
+  state.contracts
+    .filter(c => c.duration_remaining > 0 && c.exclusivity_scope === scope)
+    .map(c => c.client_id)
+    .filter((id): id is string => id !== null);
+
+const isEventEligibleForState = (state: RunState, def: EventDefinition): boolean => {
+  if (campaignGate(def).length > 0 && matchingActiveCampaigns(state, def).length === 0) return false;
+  if (def.requires_active_scope && clientsWithActiveScope(state, def.requires_active_scope).length === 0) return false;
+  return true;
+};
 
 const makeEventNews = (state: RunState, event: GameEvent, outcome: EventOutcome): NewsItem => ({
   id:               `news_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`,
@@ -35,8 +45,36 @@ const makeEventNews = (state: RunState, event: GameEvent, outcome: EventOutcome)
   description:      event.description,
   money_delta:      outcome.money_delta,
   reputation_delta: outcome.reputation_delta,
+  fan_delta:        null,
   client_id:        event.client_id,
 });
+
+const applyReleaseQualityDelta = (
+  state: RunState,
+  event: GameEvent,
+  outcome: EventOutcome,
+): RunState => {
+  const qualityDelta = outcome.release_quality_delta ?? 0;
+  if (qualityDelta === 0 || !event.campaign_id) return state;
+
+  return {
+    ...state,
+    campaigns: state.campaigns.map(campaign =>
+      campaign.id === event.campaign_id && campaign.release_plan
+        ? {
+            ...campaign,
+            release_plan: {
+              ...campaign.release_plan,
+              songs: campaign.release_plan.songs.map(song => ({
+                ...song,
+                quality: Math.max(1, Math.min(100, song.quality + qualityDelta)),
+              })),
+            },
+          }
+        : campaign,
+    ),
+  };
+};
 
 // ─── Exposure ─────────────────────────────────────────────────────────────────
 
@@ -50,10 +88,10 @@ export const computeExposure: ComputeExposure = (state) => {
     c => c.tier === 'client_entity' && c.amount >= 50_000,
   ).length;
   const audienceExposure = state.roster.reduce(
-    (sum, c) => sum + Math.min(0.6, Math.log10(Math.max(100, c.audience)) / 10),
+    (sum, c) => sum + Math.min(0.75, computeClientNarrativeWeight(state, c) / 6),
     0,
   );
-  return rosterSize * 0.15 + peakCount * 0.25 + highValueCount * 0.10 + audienceExposure;
+  return rosterSize * 0.08 + peakCount * 0.22 + highValueCount * 0.10 + audienceExposure;
 };
 
 export type ComputeEventProbability = (
@@ -67,7 +105,9 @@ export const computeEventProbability: ComputeEventProbability = (state, category
   const defenseTrackKey = categoryToDefenseKey(category);
   const track = state.agent.defense_tracks.find(t => t.key === defenseTrackKey);
   const defenseReduction = track ? Math.min(0.6, track.level * 0.12) : 0;
-  return Math.min(0.95, manifest.economy.event_base_rate * (1 + exposure) * (1 - defenseReduction));
+  const turnRamp = computeNarratorTurnRamp(state.turn_number);
+  const pacing = computeNarratorPacingMultiplier(state);
+  return Math.min(0.95, manifest.economy.event_base_rate * turnRamp * pacing * (1 + exposure) * (1 - defenseReduction));
 };
 
 const categoryToDefenseKey = (category: EventCategory): string => {
@@ -97,7 +137,7 @@ export const selectEventTarget: SelectEventTarget = (state, category, _manifest)
       const b = t.event_bias['client'];
       return acc * (typeof b === 'number' ? b : 1);
     }, 1);
-    return { id: client.id, weight: bias };
+    return { id: client.id, weight: bias * computeClientNarrativeWeight(state, client) };
   });
 
   const totalWeight = weights.reduce((sum, w) => sum + w.weight, 0);
@@ -111,8 +151,14 @@ export const selectEventTarget: SelectEventTarget = (state, category, _manifest)
 
 export type GenerateEvents = (state: RunState, manifest: VariantManifest) => GameEvent[];
 
+const EVENT_COOLDOWN_TURNS = 3;
+
 export const generateEvents: GenerateEvents = (state, manifest) => {
   if (state.turn_number === 1) return [];
+
+  const recentKeys = new Set(
+    state.resolved_events.slice(-EVENT_COOLDOWN_TURNS).map(e => e.template_key),
+  );
 
   const categories: EventCategory[] = ['client', 'market', 'agency', 'windfall'];
   const generated: GameEvent[] = [];
@@ -122,19 +168,26 @@ export const generateEvents: GenerateEvents = (state, manifest) => {
     const prob = computeEventProbability(state, category, manifest);
     if (Math.random() > prob) continue;
 
-    const candidates = manifest.events.filter(e => e.category === category && isEventEligibleForState(state, e));
+    const candidates = manifest.events.filter(
+      e => e.category === category && isEventEligibleForState(state, e) && !recentKeys.has(e.key),
+    );
     if (candidates.length === 0) continue;
 
     const def = candidates[Math.floor(Math.random() * candidates.length)];
     const campaign = matchingActiveCampaigns(state, def)[0] ?? null;
-    const clientId = campaign?.client_id ?? selectEventTarget(state, category, manifest);
+    const scopeClients = def.requires_active_scope ? clientsWithActiveScope(state, def.requires_active_scope) : [];
+    const scopeClientId = scopeClients.length > 0
+      ? scopeClients[Math.floor(Math.random() * scopeClients.length)]
+      : null;
+    const clientId = campaign?.client_id ?? scopeClientId ?? selectEventTarget(state, category, manifest);
     const clientName = clientId ? state.roster.find(c => c.id === clientId)?.name : undefined;
 
     // Map manifest EventOptionDefinition → runtime EventOption
     const options: EventOption[] = def.options.map(o => ({
-      key:     o.key,
-      label:   o.label,
-      outcome: { ...o.outcome, injects_board_item_key: null },
+      key:                o.key,
+      label:              o.label,
+      outcome:            { ...o.outcome, injects_board_item_key: null },
+      result_description: o.result_description ?? null,
     }));
 
     generated.push({
@@ -231,11 +284,32 @@ export const resolveEvent: ResolveEvent = (state, eventId, optionKey, manifest) 
     peak_reputation: Math.max(state.peak_reputation, reputation),
   };
 
+  s = applyReleaseQualityDelta(s, resolved, outcome);
+
   if (outcome.injects_board_item_key) {
     s = injectWindfallBoardItem(s, event, manifest);
   }
 
+  if (outcome.cancels_campaign && event.campaign_id) {
+    s = cancelLinkedCampaign(s, event.campaign_id);
+  }
+
   return s;
+};
+
+const cancelLinkedCampaign = (state: RunState, campaignId: string): RunState => {
+  const campaign = state.campaigns.find(c => c.id === campaignId);
+  if (!campaign) return state;
+
+  return {
+    ...state,
+    campaigns: state.campaigns.filter(c => c.id !== campaignId),
+    roster: state.roster.map(c =>
+      c.id === campaign.client_id && c.active_campaign_id === campaignId
+        ? { ...c, active_campaign_id: null }
+        : c,
+    ),
+  };
 };
 
 // Minimal inline stat application (avoids importing client.ts → no cycle)

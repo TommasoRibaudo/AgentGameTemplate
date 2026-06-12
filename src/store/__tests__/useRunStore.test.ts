@@ -43,6 +43,50 @@ describe('useRunStore — clearRun', () => {
   });
 });
 
+describe('useRunStore — pinned clients', () => {
+  it('pins roster clients in order', () => {
+    const a = makeClient({ id: 'client_a', name: 'A' });
+    const b = makeClient({ id: 'client_b', name: 'B' });
+    const c = makeClient({ id: 'client_c', name: 'C' });
+    useRunStore.getState().loadExistingRun(makeRunState({ roster: [a, b, c] }), manifest);
+
+    expect(useRunStore.getState().pinClient('client_a')).toBe(true);
+    expect(useRunStore.getState().pinClient('client_b')).toBe(true);
+    expect(useRunStore.getState().pinClient('client_c')).toBe(true);
+
+    expect(useRunStore.getState().state!.pinned_client_ids).toEqual(['client_a', 'client_b', 'client_c']);
+  });
+
+  it('removes a released client from pinned slots', () => {
+    const client = makeClient({ id: 'client_a' });
+    useRunStore.getState().loadExistingRun(
+      makeRunState({
+        roster: [client],
+        pinned_client_ids: ['client_a'],
+        dismissed_auto_client_ids: ['client_a'],
+      }),
+      manifest,
+    );
+
+    useRunStore.getState().releaseClient('client_a');
+
+    expect(useRunStore.getState().state!.pinned_client_ids).toEqual([]);
+    expect(useRunStore.getState().state!.dismissed_auto_client_ids).toEqual([]);
+  });
+
+  it('dismisses automatic lower-bar clients and clears dismissal when pinned manually', () => {
+    const client = makeClient({ id: 'client_a' });
+    useRunStore.getState().loadExistingRun(makeRunState({ roster: [client] }), manifest);
+
+    useRunStore.getState().dismissAutoClient('client_a');
+    expect(useRunStore.getState().state!.dismissed_auto_client_ids).toEqual(['client_a']);
+
+    expect(useRunStore.getState().pinClient('client_a')).toBe(true);
+    expect(useRunStore.getState().state!.pinned_client_ids).toEqual(['client_a']);
+    expect(useRunStore.getState().state!.dismissed_auto_client_ids).toEqual([]);
+  });
+});
+
 describe('useRunStore — startTurn / endTurn', () => {
   it('startTurn advances phase from turn_open to decision', () => {
     useRunStore.getState().startNewRun(manifest);
@@ -88,10 +132,33 @@ describe('useRunStore — upgradeAgentStat', () => {
     expect(useRunStore.getState().state!.agent.stats.operations).toBe(1);
   });
 
+  it('records manager skill upgrades as agency expenses', () => {
+    useRunStore.getState().loadExistingRun(makeRunState({ money: 50_000, reputation: 50 }), manifest);
+    useRunStore.getState().upgradeAgentStat('operations');
+
+    const item = useRunStore.getState().state!.news_feed.at(-1)!;
+    expect(item.type).toBe('agency_spend');
+    expect(item.money_delta).toBe(-manifest.economy.agent_stat_upgrade_cost.money);
+    expect(item.description).toContain('Manager skill upgraded');
+  });
+
   it('leaves stat unchanged when player cannot afford it', () => {
     useRunStore.getState().loadExistingRun(makeRunState({ money: 0, reputation: 0 }), manifest);
     useRunStore.getState().upgradeAgentStat('operations');
     expect(useRunStore.getState().state!.agent.stats.operations).toBe(0);
+    expect(useRunStore.getState().state!.news_feed).toHaveLength(0);
+  });
+});
+
+describe('useRunStore — upgradeInfrastructure', () => {
+  it('records infrastructure upgrades as agency expenses', () => {
+    useRunStore.getState().loadExistingRun(makeRunState({ money: 50_000 }), manifest);
+    useRunStore.getState().upgradeInfrastructure('legal');
+
+    const item = useRunStore.getState().state!.news_feed.at(-1)!;
+    expect(item.type).toBe('agency_spend');
+    expect(item.money_delta).toBe(-3_000);
+    expect(item.description).toContain('Infrastructure upgraded');
   });
 });
 
@@ -100,11 +167,14 @@ describe('useRunStore — investScouting', () => {
     const prospect = {
       id: 'prospect_1',
       name: 'Prospect One',
+      age_weeks: 20 * 52,
       arc_stage: 'rising' as const,
       audience: 5_000,
       stats: makeClientStats(),
       scouting_invested: 0,
       max_potential: 80,
+      expires_in: 4,
+      generated_at_reputation: 50,
     };
     useRunStore.getState().loadExistingRun(
       makeRunState({ money: 1_000, prospects: [prospect] }),
@@ -123,11 +193,14 @@ describe('useRunStore — investScouting', () => {
     const prospect = {
       id: 'prospect_1',
       name: 'Prospect One',
+      age_weeks: 20 * 52,
       arc_stage: 'rising' as const,
       audience: 5_000,
       stats: makeClientStats(),
       scouting_invested: 0,
       max_potential: 80,
+      expires_in: 4,
+      generated_at_reputation: 50,
     };
     useRunStore.getState().loadExistingRun(
       makeRunState({ money: 100, prospects: [prospect] }),

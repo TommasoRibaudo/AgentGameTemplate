@@ -3,6 +3,7 @@ import { VariantManifest } from '../types/manifest';
 // Valid infrastructure keys (must match InfrastructureUpgradeKey in progression.ts)
 const VALID_INFRA_KEYS = new Set(['roster_slot', 'insurance', 'pr', 'legal', 'medical']);
 const CORE_STAT_KEYS   = new Set(['talent', 'form', 'marketability', 'morale']);
+const RELEASE_KINDS    = new Set(['album', 'single', 'mixtape']);
 
 // Weight sums must match 1.0 within this tolerance (float arithmetic)
 const WEIGHT_SUM_TOLERANCE = 0.01;
@@ -31,6 +32,34 @@ function checkCampaignTypeKeys(
     check(
       campaignTypeKeys.has(key),
       `${ownerLabel} references unknown campaign_type_key "${key}"`,
+    );
+  }
+}
+
+function checkReleaseKinds(ownerLabel: string, kinds: unknown): void {
+  if (kinds === undefined) return;
+  check(Array.isArray(kinds), `${ownerLabel} requires_catalog_release_kind must be an array when provided`);
+  for (const kind of kinds as unknown[]) {
+    check(typeof kind === 'string', `${ownerLabel} requires_catalog_release_kind entries must be strings`);
+    check(
+      RELEASE_KINDS.has(kind),
+      `${ownerLabel} requires_catalog_release_kind entries must be "album", "single", or "mixtape"`,
+    );
+  }
+}
+
+function checkEventOutcome(ownerLabel: string, outcome: unknown): void {
+  check(isObject(outcome), `${ownerLabel} outcome must be an object`);
+  if ((outcome as Record<string, unknown>).release_quality_delta !== undefined) {
+    check(
+      typeof (outcome as Record<string, unknown>).release_quality_delta === 'number',
+      `${ownerLabel} outcome.release_quality_delta must be a number when provided`,
+    );
+  }
+  if ((outcome as Record<string, unknown>).cancels_campaign !== undefined) {
+    check(
+      typeof (outcome as Record<string, unknown>).cancels_campaign === 'boolean',
+      `${ownerLabel} outcome.cancels_campaign must be a boolean when provided`,
     );
   }
 }
@@ -103,8 +132,14 @@ export function validateManifest(raw: unknown): VariantManifest {
     campaignTypeKeys.add(ct.key);
     if (ct.release_kind !== undefined) {
       check(
-        ct.release_kind === 'album' || ct.release_kind === 'single',
-        `campaign_type "${ct.key}" release_kind must be "album" or "single" when provided`,
+        ct.release_kind === 'album' || ct.release_kind === 'single' || ct.release_kind === 'mixtape',
+        `campaign_type "${ct.key}" release_kind must be "album", "single", or "mixtape" when provided`,
+      );
+    }
+    if (ct.requires_label_contract !== undefined) {
+      check(
+        typeof ct.requires_label_contract === 'boolean',
+        `campaign_type "${ct.key}" requires_label_contract must be a boolean when provided`,
       );
     }
     check(
@@ -121,6 +156,16 @@ export function validateManifest(raw: unknown): VariantManifest {
       `campaign_type "${ct.key}" base_payout must be >= 0`,
     );
     check(Array.isArray(ct.valid_arc_stages), `campaign_type "${ct.key}" valid_arc_stages must be an array`);
+    if (ct.size_labels !== undefined) {
+      check(isObject(ct.size_labels), `campaign_type "${ct.key}" size_labels must be an object when provided`);
+      for (const [size, label] of Object.entries(ct.size_labels as Record<string, unknown>)) {
+        check(
+          ['small', 'medium', 'large'].includes(size),
+          `campaign_type "${ct.key}" size_labels key "${size}" must be small, medium, or large`,
+        );
+        check(typeof label === 'string', `campaign_type "${ct.key}" size_labels.${size} must be a string`);
+      }
+    }
   }
 
   // ── Traits
@@ -133,6 +178,20 @@ export function validateManifest(raw: unknown): VariantManifest {
     check(typeof t.marketability_modifier === 'number', `trait "${t.key}" marketability_modifier must be a number`);
     check(typeof t.trigger_condition_key  === 'string', `trait "${t.key}" trigger_condition_key must be a string`);
     check(typeof t.trigger_threshold      === 'number', `trait "${t.key}" trigger_threshold must be a number`);
+    if (t.decision_trigger !== undefined) {
+      check(isObject(t.decision_trigger), `trait "${t.key}" decision_trigger must be an object when provided`);
+      const dt = t.decision_trigger;
+      check(typeof dt.template_key === 'string', `trait "${t.key}" decision_trigger.template_key must be a string`);
+      check(typeof dt.option_key === 'string', `trait "${t.key}" decision_trigger.option_key must be a string`);
+      check(
+        typeof dt.required_count === 'number' && dt.required_count > 0,
+        `trait "${t.key}" decision_trigger.required_count must be > 0`,
+      );
+      check(
+        typeof dt.probability === 'number' && dt.probability >= 0 && dt.probability <= 1,
+        `trait "${t.key}" decision_trigger.probability must be in [0, 1]`,
+      );
+    }
   }
 
   // ── Events — options array + default_outcome; defense_track_key must be null or valid infra key
@@ -149,9 +208,9 @@ export function validateManifest(raw: unknown): VariantManifest {
       check(isObject(opt), `event "${ev.key}" each option must be an object`);
       check(typeof (opt as Record<string,unknown>).key   === 'string', `event "${ev.key}" option.key must be a string`);
       check(typeof (opt as Record<string,unknown>).label === 'string', `event "${ev.key}" option.label must be a string`);
-      check(isObject((opt as Record<string,unknown>).outcome), `event "${ev.key}" option.outcome must be an object`);
+      checkEventOutcome(`event "${ev.key}" option "${(opt as Record<string, unknown>).key}"`, (opt as Record<string,unknown>).outcome);
     }
-    check(isObject(ev.default_outcome), `event "${ev.key}" default_outcome must be an object`);
+    checkEventOutcome(`event "${ev.key}" default_outcome`, ev.default_outcome);
     if (ev.defense_track_key !== null) {
       check(
         typeof ev.defense_track_key === 'string' && VALID_INFRA_KEYS.has(ev.defense_track_key as string),
@@ -191,6 +250,7 @@ export function validateManifest(raw: unknown): VariantManifest {
     check(typeof bit.type                 === 'string', `board_item_template "${bit.key}" type must be a string`);
     check(typeof bit.description_template === 'string', `board_item_template "${bit.key}" description_template must be a string`);
     checkCampaignTypeKeys(`board_item_template "${bit.key}"`, bit.campaign_type_keys, campaignTypeKeys);
+    checkReleaseKinds(`board_item_template "${bit.key}"`, bit.requires_catalog_release_kind);
     check(typeof bit.rep_gate             === 'number', `board_item_template "${bit.key}" rep_gate must be a number`);
     check(Array.isArray(bit.valid_arc_stages),          `board_item_template "${bit.key}" valid_arc_stages must be an array`);
     if (bit.contract_template_key !== null) {
@@ -247,6 +307,21 @@ export function validateManifest(raw: unknown): VariantManifest {
       check(
         typeof v === 'number' && (v as number) > 0,
         `arc.stage_multipliers.${stage}.${field} must be > 0`,
+      );
+    }
+  }
+
+  // ── Budget floors (optional)
+  if (raw.budget_floors !== undefined) {
+    check(isObject(raw.budget_floors), 'manifest.budget_floors must be an object when provided');
+    for (const [size, floor] of Object.entries(raw.budget_floors as Record<string, unknown>)) {
+      check(
+        ['small', 'medium', 'large'].includes(size),
+        `manifest.budget_floors key "${size}" must be small, medium, or large`,
+      );
+      check(
+        typeof floor === 'number' && (floor as number) >= 0,
+        `manifest.budget_floors.${size} must be a non-negative number`,
       );
     }
   }

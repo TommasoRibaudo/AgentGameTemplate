@@ -30,6 +30,9 @@ export interface AppliedTrait {
 export interface Client {
   id: string;
   name: string;
+  gender?: 'male' | 'female';
+  portrait?: string;
+  age_weeks: number;
   arc_stage: ArcStage;
   audience: number;
   stats: ClientStats;
@@ -54,9 +57,14 @@ export interface Client {
 export interface Prospect {
   id: string;
   name: string;
+  gender?: 'male' | 'female';
+  portrait?: string;
+  age_weeks: number;
   arc_stage: ArcStage;
   audience: number;
   stats: ClientStats;
-  scouting_invested: number;    // total spend so far narrowing this prospect's fog
-  max_potential: number;        // carried over to Client on signing
+  scouting_invested: number;           // total spend so far narrowing this prospect's fog
+  max_potential: number;               // carried over to Client on signing
+  expires_in: number;                  // turns remaining before this prospect leaves the pool
+  generated_at_reputation: number;     // reputation at generation time; used to flush stale prospects on quality milestone
 }

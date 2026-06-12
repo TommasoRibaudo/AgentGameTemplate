@@ -13,7 +13,7 @@
 - [x] Event outcomes should become news.
 - [x] Turns should be shown as a date starting from January 1 of the current year.
 - [x] Agency should invest in buildings that help clients improve stats, and in single-client boosts.
-- [ ] Centralize gameplay numerical values so variants are easier to tune.
+- [?] Centralize gameplay numerical values so variants are easier to tune.
 - [x] Events should be tied to campaigns.
 - [x] Talents should have campaign history, like albums/tours with stats.
 - [x] Talents should have fans/monthly listeners that grow.
@@ -27,36 +27,115 @@
 - [x] if the contract is between the talent and the company why are the sums involved the ones I gain? i get a cut
 - [x] album and single process rework (you create the album with songs names, and the results are felt after it completes)
 - [x] talent rework (max talent, growth towards that potential)
-- [~] over time, you get to know better your talent and the fog dissipates slowly. 
-- [~] happy clients want to renew their contract once it almost expires
-- [~] rework contracts, your counteroffer should be able to add other options (lump sum if not there) / also contract may come with exclusivity deals (label, sponsor) and objective (produce 2 albums, get this many fans)
+- [x] over time, you get to know better your talent and the fog dissipates slowly. 
+- [x] happy clients want to renew their contract once it almost expires
+- [x] rework contracts, your counteroffer should be able to add other options (lump sum if not there) / also contract may come with exclusivity deals (label, sponsor) and objective (produce 2 albums, get this many fans)
 - [x] restrict events to 1 per turn at maximum, do not give the if dismissed option at all, they have to be responded
 - [x] does the output of each turn of the campaign impact the final result (like the album gets better if I get all average instead of all poor results?)?
 - [x] traits havent' been tested very well. artist should have starting traits
 - [x] saved progress does not save
 - [x] when talents ask to renew contracts from the decision, you should see the difference from your old contract, also it happens way to often (also contract length should be in weeks, months, years, not turns and they should be longer) 
-- [ ] there is a general expectation on how an artist should perform (he should always make a better album than his best). a poorly received campaign (one way below expectations), he looses fans. 
-- [ ] you should lose fans as time goes on, less in the rising phase, more in the decay phase. 
-- [ ] the game should burn slower at first, I can't be getting a million brand deals at the beginning with shit characters
-- [ ] Reposition and recolor the end turn button
-- [ ] remove native popup ui and make it custom
-- [ ] Remove invest to scout roster, you get a little boost of fog removed at signing and then you just wait for the natural fog dissipation
-- [ ] campaign size should be thematical to the campaign and variant
-- [ ] sticking to decisions gives traits (you always ignore scandals, your artist becomes Harder to suffer a scandal)
-- [ ] small album should have few songs 
-- [ ] when events fire it says +2 rep but not +2k (it only says 2k).
-- [ ] anchor artists to lower bar to check the campaign status (manually and automatically when they are doing a campaign)
-- [ ] getting + something means it's green, red for - numbers
-- [ ] getting a few sponsors is ok, doing it too much or with the wrong company can impact morale, and fanbase
-- [ ] some company are good sponsor, but pay less. bad press companies pay more but create more bad press for the artist. 
-- [ ] there should be way more streams compared to album sold.
-- [ ] rep is called clout but not everywhere, it needs to be consistent
-- [ ] when getting infrastructure, you need also to be able to remove it as it costs money
-- [ ] add tours campaign
-- [ ] decisions / events trees that lead to major events / decisions (good and bad)
-- [ ] make clear what the ranges mean while scouting (put the word estimate, show it with colors... idk really)
-- [ ] make the decisions and events happen less, as time goes on it's fine to have more decisions (the roster and rep will impact this)
-- [ ] calm down with all the offers for label and sponsor. getting the first sponsor should feel incredibel
-- [ ] add a new campaign: perform gigs. no upfront cost, little money and fans generation
-- [ ] the starting amount of listeners is terribly high. 
-- [ ] enforce exclusivity with old contracts and new and tell player when he signs it. 
+- [x] there is a general expectation on how an artist should perform (he should always make a better album than his best). a poorly received campaign (one way below expectations), he looses fans. 
+- [x] you should lose fans as time goes on, less in the rising phase, more in the decay phase. 
+- [x] the game should burn slower at first, I can't be getting a million brand deals at the beginning with shit characters
+- [x] Reposition and recolor the end turn button
+- [x] remove native popup ui and make it custom
+- [x] Remove invest to scout roster, you get a little boost of fog removed at signing and then you just wait for the natural fog dissipation
+- [x] campaign size should be thematical to the campaign and variant
+- [x] sticking to decisions gives traits (you always ignore scandals, your artist becomes Harder to suffer a scandal)
+- [x] small album should have few songs 
+- [x] when events fire it says +2 rep but not +2k (it only says 2k).
+- [x] anchor artists to lower bar to check the campaign status (manually and automatically when they are doing a campaign)
+- [x] getting + something means it's green, red for - numbers
+- [x] getting a few sponsors is ok, doing it too much or with the wrong company can impact morale, and fanbase
+- [x] some company are good sponsor, but pay less. bad press companies pay more but create more bad press for the artist. you should not see it, but the name of the company should be very visible and clear (Political lobbies, cigarettes companies, gambling companies are all bad rep ). so we gotta think about names as well. 
+- [x] there should be way more streams compared to album sold.
+- [x] rep is called clout but not everywhere, it needs to be consistent
+- [x] when getting infrastructure, you need also to be able to remove it as it costs money
+- [x] add tours campaign
+- [x] make clear what the ranges mean while scouting (put the word estimate, show it with colors... idk really)
+- [x] make the decisions and events happen less, as time goes on it's fine to have more decisions (the roster and rep will impact this)
+- [x] calm down with all the offers for label and sponsor. getting the first sponsor should feel incredibel
+- [x] add a new campaign: perform gigs. no upfront cost, little money and fans generation
+- [x] the starting amount of listeners is terribly high. 
+- [x] enforce exclusivity with old contracts and new and tell player when he signs it. 
+- [x] the current create album results fit more a "create mixtape" campaign, less expensive but less money
+- [x] the create album campaign should produce better result, also you need a label to do one
+- [x] offer to renew contract to an artist that has its contract expiring
+- [x] artist renewing their contract will never ask for a bigger cut for you than the one they are already giving. they def will ask for more money, especially if they grew, and they might ask for a discount on the cut.
+- [x] artist that have already a following should have past campaigns (one or 2 mixtape for rising, more complete careers for better and more mature artists) 
+- [x] labels really really want to stay exclusive
+- [x] happy labels renew their contract
+- [x] labels usually give objectives, complete them for more money and a chance to get renewed
+- [x] create labels names for flavor
+- [x] the friend event should be a tutorial start by which your friend talks to you into signing him and you get a decent artist with high morale and you know him perfectly, you then get moved to the roster view and he is shining, you click on him and the campaign tab shines, then gig. this is the most basic tutorial
+- [x] news should be separated from income / expenses summary
+- [x] hidden campaign types should show and should mention the reason why they are not available
+- [x] different minimum prices for different size campaigns.
+- [x] events should happen on every screen, not just the first
+- [x] add a counter of notifications in the bottom left
+- [x] when a campaign ends create a news item.
+- [x] there is a bug where from leaderboard or achievements when you go back it sends you to the ended career
+- [x] the tutorial does not have consistent highlight color (should be the yellow) and text popup, click on campaign comes without text. also give instructions on ending the turn
+- [x] when in the tutorial, focus on aeach action obscuring the other
+- [x] doing gigs with an album on sale should boost sales (that's how you should actually sell at first)
+- [x] gig installments create fans, but I don't see it in the installment results, there should be those info there (and for release campaign in the catalog)
+- [x] turn dates (week) do not match contract dates (months) and do not match campaign dates (turns). everything should be weeks.
+- [x] Label happiness should be visible in the contracts
+- [x] composition commission campaign should be an automatic one only generated by a contract offer (check @decisions.md)
+- [x] events should show the final output before closing in pin (it will get removed once you start a new campaign)
+- [x] events show up only in one page, they need to show up in every page if the answer is needed (also lower margin feels to low for the buttons as it may interact with phone ui)
+- [x] you should not see any possible result from events and decisions. you should see costs though.
+- [x] rewrite decision and event output (sometimes it just repeats the prompt)
+- [x] in tutorial, make end turn button grey and unclickable
+- [x] if a new recruit refuses a contract, they should disappear from the scout list.
+- [x] when a contract is stipulated in a counteroffer the decision board should reflect that contract, not the first offer
+- [x] some events feel like you should get a return on the campaign itself, not just flat out money. (eg selling_song_blows_up)
+- [ ] put date with year
+- [x] recruit signing rework (they accept whatever, its really easy to get them to sign incredibly bad contracts)
+- [x] agency actions (Manager skills and infrastructure upgrades) should show up on the expenses under a specific category 
+- [x] while in client's detail, if you have interacted with a campaign, getting ready for it, and then you click away to maybe check the stat tab, you completely lose what you had done
+- [ ] campaign initial expenses do not show up in the expenses category in income / expenses in dashboard
+- [x] does you contract % impact how much you gain from campaigns?
+- [ ] i fired somebody but I think I got a notification of their contract expiring weeks later
+- [ ] instead of W34 for dates (completed gigs for example) put the date 
+- [ ] completing a campaign adds all installments as an income, but they trickled down (and were put as income) every single turn?
+- [ ] if you have an active campaign (or are selling an album) what happens when you rescind the artists' contract?
+- [ ] getting traits should create a news
+- [ ] are more expensive and longer campaign more difficult to generate great installments result? this is needed for the next item
+- [ ] multiple great installments in a row should give a multiplier to the result (for installments campaign: each great performance, gives a multiplier to the given result / release campaign take the best streak and give you a boost to sales and fans and streams). this multiplier is stronger for rising, when much lower for peak, 0 for decay arc
+- [ ] contract clause to have termination payout for the client (or sponsor) on rescission before end.
+- [ ] does a higher range between 2 artists' skills always mean the value on the higher range is higher than the other? but the 
+- [ ] the offer contract decision should come with the portrait of the client
+- [ ] how does morale impact installments? how does it interact with contract renewal and posture?
+- [ ] morale tends to be very low and form and marketability very high, analyze reasons. Morale should go up as you do not do anything with the artist (that also gives the client to propose a campaign through decisions)
+- [ ] when the tutorial is interrupted, restart it on startup (remember to remove dev reyes) - if dev reyes already started the gig, just let the tutorial just instaterminate when restarting the app. you keep reyes and the gig and the game starts
+- [ ] the tutorial should move on to explain scout. makes you scout, then sign somebody (this person asks for 0 dollars per week no matter what)
+- [ ] move on to explaining agency and upgrades and bank quickly. 
+- [ ] slow down new recruits generation, improve skills or infra to improve chances of new recruits. 
+- [x] when you release an record campaign result get a summary of the name, details and quality.
+- [ ] consider having a "breakthrough record campaign" album is so good you sell 10 times and get 10 times more fans
+- [ ] insert album critics review for the album you got instead of seeing its quality. 
+- [ ] add credits for mono portrait pack
+- [ ] search for a font
+- [ ] when doing albums and tours, no longer mixtapes and gigs, be able to invest up to 24 weeks max
+
+- [+++] news rework (i dont even know what they are telling me) and the order is reversed, it needs to go from newest to oldest (and it also loads all of the news at once when expanding the news tab)
+- [+++] monetization tab (in agency, below bank): mention who you are and that you understand monetization suck, just be nice and ask confidently if they want to support my work to: watch an ad to get a cash injection, pay for a cash injection, or have a feature bounty system with variants offered, features to add. if the bounty is 100 dollars, you can still donate 1 dollar and it shows up in the counter.
+- [+++] decisions / events trees that lead to major events / decisions (good and bad)
+- [+++] put catpuccin colors
+- [+++] create a tests environment where you can say: good artist does bad album and you can see the results depending on your investment.
+- [+++] End of year awards
+- [+++] in artist Soverview, add the discography, concerts and gigs as separate categories and make it look a bit like spotify (leave space for a future album cover)
+  - [++] some similar mechanic to the one where you can see the spotify page of your artist (maybe make a different)
+- [+++] an artists can sometimes change their name to a stage name (make a good list of names that sound cool or nicknames)
+- [+++] contract objectives and clauses rework (I believe contract clauses and objectives are core to the game)
+- [+++] rework bank
+- [+++] think about animations. for actions like signing a dude, a new contract etc...
+
+- [later] revise labels for all types of actions and traits (need effective description, but can only be done once mostly done with the game)
+- [later] create a monochrome image generator from sources images using our usual colors. this will be used to generate a album covers
+- [later] create random news that affect the market (and some that don't) to add to the  news channel.
+
+
+- [mp] weekly multiplayer leaderboards for highest grossing contract, biggest festival, best album, most famous artist (everything needs to be created on that week, but the artist just needs to be active during that week irl)

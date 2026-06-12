@@ -8,6 +8,7 @@
     "@react-navigation/native": "^7.2.6",
     "@react-navigation/native-stack": "^7.17.0",
     "expo": "^54.0.35",
+    "expo-clipboard": "~8.0.8",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",
     "react-native": "0.81.5",
@@ -43,6 +44,7 @@
       "/node_modules/"
     ],
     "moduleNameMapper": {
+      "\\.(png|jpg|jpeg|gif|svg)$": "<rootDir>/__mocks__/fileMock.js",
       "^@types/(.*)$": "<rootDir>/src/types/$1",
       "^@engine/(.*)$": "<rootDir>/src/engine/$1",
       "^@components/(.*)$": "<rootDir>/src/components/$1",

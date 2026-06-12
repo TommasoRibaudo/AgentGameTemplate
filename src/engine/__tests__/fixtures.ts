@@ -30,6 +30,7 @@ export const makeClientStats = (values: Partial<Record<CoreStatKey, number>> = {
 export const makeClient = (overrides?: Partial<Client>): Client => ({
   id: nextId(),
   name: 'Test Client',
+  age_weeks: 20 * 52,
   arc_stage: 'rising',
   audience: 10_000,
   stats: makeClientStats(),
@@ -60,7 +61,7 @@ export const makeContract = (overrides?: Partial<Contract>): Contract => ({
   tier: 'agent_client',
   client_id: nextId(),
   entity_id: null,
-  payout_type: 'per_month',
+  payout_type: 'per_week',
   your_cut: 15,
   amount: 10000,
   duration_remaining: 12,
@@ -71,6 +72,7 @@ export const makeContract = (overrides?: Partial<Contract>): Contract => ({
   expires_in: null,
   exclusivity_scope: null,
   turns_active: 0,
+  album_option: null,
   ...overrides,
 });
 
@@ -104,18 +106,26 @@ export const makeRunState = (overrides?: Partial<RunState>): RunState => ({
   debt: makeDebtState(),
   agent: makeAgentState(),
   roster: [],
+  pinned_client_ids: [],
+  dismissed_auto_client_ids: [],
+  fired_one_time_keys: [],
   prospects: [],
   contracts: [],
   campaigns: [],
   pending_events: [],
   resolved_events: [],
   decision_board: [],
+  narrator_pacing: { consecutive_skipped_turns: 0, last_turn_skipped_items: 0 },
   news_feed: [],
+  pending_release_summaries: [],
   is_active: true,
   end_condition: null,
   peak_reputation: 50,
   total_earnings: 0,
   clients_developed: 0,
+  tutorial_step:        null,
+  tutorial_friend_id:   null,
+  tutorial_prospect_id: null,
   ...overrides,
 });
 
@@ -135,8 +145,8 @@ const makeEconomy = (): EconomyConfig => ({
 });
 
 const makeArcConfig = (): ArcConfig => ({
-  rising_to_peak_base_turns: 24,
-  peak_to_declining_base_turns: 36,
+  rising_to_peak_base_turns: 104,
+  peak_to_declining_base_turns: 156,
   stage_multipliers: {
     rising:    { talent: 0.8, form: 0.8, marketability: 0.7, income: 0.6 },
     peak:      { talent: 1.0, form: 1.0, marketability: 1.0, income: 1.0 },
